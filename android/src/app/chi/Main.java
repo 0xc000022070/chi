@@ -63,7 +63,12 @@ public final class Main extends Activity {
     private final BroadcastReceiver installed = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, 0) == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
+            if (status != PackageInstaller.STATUS_SUCCESS && status != PackageInstaller.STATUS_PENDING_USER_ACTION
+                    && status != PackageInstaller.STATUS_FAILURE_ABORTED) {
+                Toast.makeText(context, "update failed: " + intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE), Toast.LENGTH_LONG).show();
+            }
+            if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
                 confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class);
                 if (started) {
                     showConfirm();
