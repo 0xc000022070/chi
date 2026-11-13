@@ -208,11 +208,13 @@ async fn home(State(shell): State<Shell>, Extension(visit): Extension<Visit>) ->
                 }
             }
             @if admin {
-                h2 { "New org" }
-                form.stack method="post" action="/orgs" {
-                    label { "Name" input name="name" required; }
-                    label { "Slug" input name="slug" required pattern="[a-z0-9-]+"; }
-                    button { "create" }
+                details.add {
+                    summary { "New org" }
+                    form.stack method="post" action="/orgs" {
+                        label { "Name" input name="name" required; }
+                        label { "Slug" input name="slug" required pattern="[a-z0-9-]+"; }
+                        button { "create" }
+                    }
                 }
             }
         },

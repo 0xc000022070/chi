@@ -57,8 +57,12 @@ fn short(commit: &str) -> &str {
     commit.get(..8).unwrap_or(commit)
 }
 
-fn megabytes(size: i64) -> String {
-    format!("{:.1} MB", size as f64 / 1_048_576.0)
+fn file_size(size: i64) -> String {
+    match size {
+        ..1024 => format!("{size} B"),
+        ..1_048_576 => format!("{:.0} KB", size as f64 / 1024.0),
+        _ => format!("{:.1} MB", size as f64 / 1_048_576.0),
+    }
 }
 
 async fn builds(
@@ -183,7 +187,7 @@ async fn build(
             @for file in &files {
                 a.row href={ (BASE) "/" (id) "/artifacts/" (file.name) } {
                     strong { (file.name) }
-                    span { (megabytes(file.size)) " · sha256 " (file.sha256) }
+                    span { (file_size(file.size)) " · sha256 " (file.sha256) }
                 }
             }
             (published(&deliveries))
@@ -217,4 +221,16 @@ async fn download(
 ) -> Result<Response, Failure> {
     builds.build(id).await?.filter(|build| build.org_id == ctx.org_id).ok_or_else(Failure::not_found)?;
     builds.serve(id, &name, ctx.email, client_ip(&headers)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::file_size;
+
+    #[test]
+    fn file_size_picks_a_readable_unit() {
+        assert_eq!(file_size(512), "512 B");
+        assert_eq!(file_size(16_948), "17 KB");
+        assert_eq!(file_size(90_000_000), "85.8 MB");
+    }
 }
