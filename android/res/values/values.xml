@@ -1,0 +1,14 @@
+<resources>
+    <color name="bg">#f3f3f1</color>
+    <color name="ink">#18191b</color>
+    <color name="muted">#5c6066</color>
+    <color name="line">#cfcfca</color>
+    <color name="accent">#ff4a1f</color>
+    <color name="icon_bg">#18191b</color>
+    <style name="App" parent="@android:style/Theme.DeviceDefault.DayNight">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorAccent">@color/accent</item>
+    </style>
+</resources>
