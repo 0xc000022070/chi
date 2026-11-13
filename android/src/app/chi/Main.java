@@ -2,7 +2,12 @@ package app.chi;
 
 import android.app.Activity;
 import android.app.DownloadManager;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.pm.PackageInstaller;
 import android.graphics.Bitmap;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -27,6 +32,11 @@ import android.widget.TextView;
 import android.widget.Toast;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public final class Main extends Activity {
@@ -34,6 +44,7 @@ public final class Main extends Activity {
     private static final String HOME = "https://" + HOST;
     private static final String[] TABS = {"bugs", "builds", "settings"};
     private static final String[] GLYPHS = {"[!]", "[#]", "[~]"};
+    private static final String INSTALLED = "app.chi.INSTALLED";
     private static final List<String> RESERVED = List.of("api", "login", "logout", "orgs", "invite", "sso", "callback");
 
     private final TextView[][] labels = new TextView[TABS.length][];
@@ -45,6 +56,16 @@ public final class Main extends Activity {
     private String slug;
     private boolean backHooked;
     private boolean typing;
+    private volatile int update = -1;
+    private Intent confirm;
+    private final BroadcastReceiver installed = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, 0) == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+                confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class);
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle state) {
@@ -110,6 +131,70 @@ public final class Main extends Activity {
 
         if (state == null || web.restoreState(state) == null) {
             web.loadUrl(getPreferences(MODE_PRIVATE).getString("last", HOME));
+        }
+        registerReceiver(installed, new IntentFilter(INSTALLED), RECEIVER_NOT_EXPORTED);
+        new Thread(this::fetchUpdate).start();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (confirm != null) {
+            startActivity(confirm);
+            confirm = null;
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (update < 0) {
+            return;
+        }
+        Intent done = new Intent(INSTALLED).setPackage(getPackageName());
+        PendingIntent result = PendingIntent.getBroadcast(this, 0, done, PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        try (PackageInstaller.Session session = getPackageManager().getPackageInstaller().openSession(update)) {
+            session.commit(result.getIntentSender());
+        } catch (IOException | RuntimeException gone) {
+            Toast.makeText(this, "update failed", Toast.LENGTH_SHORT).show();
+        }
+        update = -1;
+    }
+
+    @Override
+    protected void onDestroy() {
+        unregisterReceiver(installed);
+        super.onDestroy();
+    }
+
+    private void fetchUpdate() {
+        PackageInstaller installer = getPackageManager().getPackageInstaller();
+        installer.getMySessions().forEach(stale -> installer.abandonSession(stale.getSessionId()));
+        int id = -1;
+        try {
+            long own = getPackageManager().getPackageInfo(getPackageName(), 0).getLongVersionCode();
+            String latest;
+            try (InputStream in = URI.create(HOME + "/app.version").toURL().openStream()) {
+                latest = new String(in.readAllBytes(), StandardCharsets.UTF_8).trim();
+            }
+            if (Long.parseLong(latest) <= own) {
+                return;
+            }
+            PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+            params.setAppPackageName(getPackageName());
+            params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
+            id = installer.createSession(params);
+            try (PackageInstaller.Session session = installer.openSession(id);
+                    InputStream in = URI.create(HOME + "/app.apk").toURL().openStream();
+                    OutputStream out = session.openWrite("chi.apk", 0, -1)) {
+                in.transferTo(out);
+                session.fsync(out);
+            }
+            update = id;
+        } catch (Exception offline) {
+            if (id >= 0) {
+                installer.abandonSession(id);
+            }
         }
     }
 

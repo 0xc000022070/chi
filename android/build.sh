@@ -6,11 +6,12 @@ sdk=${ANDROID_HOME:?set ANDROID_HOME}
 tools=$(ls -d "$sdk"/build-tools/* | sort -V | tail -1)
 platform=$(ls -d "$sdk"/platforms/* | sort -V | tail -1)/android.jar
 keys=${CHI_KEYS:-$HOME/.config/chi}
+code=$(git rev-list --count HEAD)
 
 rm -rf out && mkdir -p out/classes out/dex
 "$tools/aapt2" compile --dir res -o out/res.zip
 "$tools/aapt2" link -o out/unsigned.apk -I "$platform" --manifest AndroidManifest.xml --java out/gen \
-    --version-code "$(git rev-list --count HEAD)" --version-name "$(git rev-parse --short HEAD)" out/res.zip
+    --version-code "$code" --version-name "$(git rev-parse --short HEAD)" out/res.zip
 javac -nowarn -source 17 -target 17 -cp "$platform" -d out/classes out/gen/app/chi/R.java src/app/chi/Main.java
 java -cp "$tools/lib/d8.jar" com.android.tools.r8.D8 --release --min-api 33 --lib "$platform" --output out/dex out/classes/app/chi/*.class
 (cd out/dex && zip -q ../unsigned.apk classes.dex)
@@ -25,3 +26,8 @@ if [ ! -f "$keys/android.jks" ]; then
 fi
 java -jar "$tools/lib/apksigner.jar" sign --ks "$keys/android.jks" --ks-pass "file:$keys/android.pass" --out out/chi.apk out/aligned.apk
 ls -l out/chi.apk
+
+if [ "${1:-}" = publish ]; then
+    CHI_TOKEN=$(cat "$keys/token-chi") chi push --url https://chi.nshard.com --version "$code" \
+        --commit "$(git rev-parse HEAD)" --branch "$(git branch --show-current)" --tag release out/chi.apk
+fi
