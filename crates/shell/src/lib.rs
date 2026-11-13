@@ -341,9 +341,52 @@ async fn run_hook(hook: &Path, payload: &str) -> std::io::Result<(bool, String)>
     Ok((output.status.success(), text))
 }
 
+pub fn set_password(data: &Path, email: &str, password: &str) -> Result<(), String> {
+    if password.len() < web::MIN_PASSWORD {
+        return Err(format!("the password needs {}+ characters", web::MIN_PASSWORD));
+    }
+    let email = email.trim().to_lowercase();
+    let hash = web::hash_password(password).map_err(|failure| failure.1)?;
+    let conn = Connection::open(data.join("chimera.db")).map_err(|e| e.to_string())?;
+    conn.busy_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
+    let changed = conn
+        .execute("UPDATE users SET password_hash = ?1 WHERE email = ?2", (&hash, &email))
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err(format!("no user {email}"));
+    }
+    conn.execute("DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = ?1)", [&email])
+        .map(drop)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_password_replaces_the_hash_and_ends_sessions() {
+        let data = std::env::temp_dir().join(format!("chimera-passwd-{}", secret()));
+        std::fs::create_dir_all(&data).unwrap();
+        let conn = Connection::open(data.join("chimera.db")).unwrap();
+        conn.execute_batch(include_str!("schema.sql")).unwrap();
+        conn.execute("INSERT INTO users (id, email, password_hash, created_at) VALUES (1, 'a@b.c', 'old', 0)", []).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (token_hash, user_id, host, expires_at) VALUES ('t', 1, 'h', 9999999999)",
+            [],
+        )
+        .unwrap();
+
+        assert!(set_password(&data, "a@b.c", "short").is_err());
+        assert!(set_password(&data, "nobody@b.c", "long enough password").is_err());
+        set_password(&data, " A@B.c ", "long enough password").unwrap();
+
+        let hash: String = conn.query_row("SELECT password_hash FROM users WHERE id = 1", [], |row| row.get(0)).unwrap();
+        assert!(web::password_matches("long enough password", &hash));
+        let sessions: i64 = conn.query_row("SELECT count(*) FROM sessions", [], |row| row.get(0)).unwrap();
+        assert_eq!(sessions, 0);
+        std::fs::remove_dir_all(&data).unwrap();
+    }
 
     #[test]
     fn utc_formats_known_instants() {

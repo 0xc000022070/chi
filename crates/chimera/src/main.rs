@@ -1,12 +1,14 @@
 use std::{os::unix::fs::PermissionsExt, path::PathBuf, process::ExitCode};
 
-const USAGE: &str = "usage: chimera serve | chimera push ...
+const USAGE: &str = "usage: chimera serve | chimera push ... | chimera passwd <email>
 
 serve reads its settings from the environment:
   CHIMERA_URL     public url of the hub, e.g. https://chimera.example.com (required)
   CHIMERA_DATA    directory for databases and build files (default ./data)
   CHIMERA_LISTEN  address to bind (default 127.0.0.1:8080)
-  CHIMERA_HOOKS   directory of executables; each one gets every event as JSON on stdin";
+  CHIMERA_HOOKS   directory of executables; each one gets every event as JSON on stdin
+
+passwd reads the new password from stdin, uses CHIMERA_DATA and signs the user out everywhere";
 
 fn hooks(dir: Option<String>) -> Result<Vec<PathBuf>, String> {
     let Some(dir) = dir else { return Ok(Vec::new()) };
@@ -39,6 +41,14 @@ async fn serve() -> Result<(), String> {
     axum::serve(listener, app).await.map_err(|e| e.to_string())
 }
 
+fn passwd(email: Option<&String>) -> Result<(), String> {
+    let email = email.ok_or(USAGE)?;
+    let data = PathBuf::from(std::env::var("CHIMERA_DATA").unwrap_or_else(|_| "data".to_owned()));
+    let mut password = String::new();
+    std::io::stdin().read_line(&mut password).map_err(|e| e.to_string())?;
+    shell::set_password(&data, email, password.trim_end_matches(['\r', '\n']))
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let outcome = match args.first().map(String::as_str) {
@@ -50,6 +60,7 @@ fn main() -> ExitCode {
             .map_err(|e| e.to_string())
             .and_then(|runtime| runtime.block_on(serve())),
         Some("push") => depot::push(&args[1..]),
+        Some("passwd") => passwd(args.get(1)),
         _ => Err(USAGE.to_owned()),
     };
     match outcome {

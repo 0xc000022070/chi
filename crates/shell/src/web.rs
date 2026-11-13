@@ -24,7 +24,7 @@ const COOKIE: &str = "chimera_session";
 const SESSION_TTL: i64 = 30 * 86_400;
 const EXTERNAL_SESSION_TTL: i64 = 86_400;
 const INVITE_TTL: i64 = 7 * 86_400;
-const MIN_PASSWORD: usize = 10;
+pub(crate) const MIN_PASSWORD: usize = 10;
 
 #[derive(Clone)]
 struct Visit {
@@ -57,7 +57,7 @@ fn session_token(headers: &HeaderMap) -> Option<&str> {
         .find_map(|pair| pair.trim().strip_prefix(COOKIE)?.strip_prefix('='))
 }
 
-fn hash_password(password: &str) -> Result<String, Failure> {
+pub(crate) fn hash_password(password: &str) -> Result<String, Failure> {
     let mut salt = [0u8; 16];
     getrandom::fill(&mut salt).expect("os entropy");
     let salt = SaltString::encode_b64(&salt).map_err(|e| Failure(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -67,7 +67,7 @@ fn hash_password(password: &str) -> Result<String, Failure> {
         .map_err(|e| Failure(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
-fn password_matches(password: &str, hash: &str) -> bool {
+pub(crate) fn password_matches(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash).is_ok_and(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
 }
 
