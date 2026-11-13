@@ -8,6 +8,7 @@ use axum::{
 use maud::{Markup, html};
 use rusqlite::OptionalExtension;
 use serde::Deserialize;
+use serde_json::{Value, json};
 use shell::{Ctx, Failure, Role, ago, client_ip, glyph, org_page, repo_glyph, utc};
 
 use crate::{BUILD_COLUMNS, Build, Builds, artifacts, build_row};
@@ -65,24 +66,65 @@ fn file_size(size: i64) -> String {
     }
 }
 
+fn search(conn: &rusqlite::Connection, org_id: i64, q: &str, limit: i64) -> rusqlite::Result<Vec<Build>> {
+    conn.prepare(&format!(
+        "SELECT {BUILD_COLUMNS} FROM builds
+         WHERE org_id = ?1 AND (?2 = '' OR instr(version, ?2) OR instr(commit_sha, ?2) OR instr(?2, commit_sha) AND commit_sha != '' OR branch = ?2 OR tag = ?2)
+         ORDER BY id DESC LIMIT ?3"
+    ))?
+    .query_map((org_id, q, limit), build_row)?
+    .collect()
+}
+
+impl Builds {
+    fn build_json(&self, ctx: &Ctx, build: &Build, repos: &[shell::Repo]) -> Value {
+        let repo = repos.iter().find(|repo| repo.id == build.repo_id);
+        json!({
+            "id": build.id,
+            "repo": repo.map(|repo| &repo.name),
+            "repo_url": repo.map(|repo| &repo.url),
+            "version": build.version,
+            "commit": build.commit,
+            "branch": build.branch,
+            "tag": build.tag,
+            "builder": build.builder,
+            "status": build.status,
+            "started": utc(build.started_at),
+            "finished": build.finished_at.map(utc),
+            "url": self.shell.url(&ctx.href(&format!("/{BASE}/{}", build.id))),
+        })
+    }
+
+    pub async fn builds_json(&self, ctx: &Ctx, q: &str, limit: i64) -> Result<Value, Failure> {
+        let (org_id, q) = (ctx.org_id, q.to_owned());
+        let rows = self.db.call(move |conn| search(conn, org_id, &q, limit)).await?;
+        let repos = self.shell.repos(org_id).await?;
+        Ok(rows.iter().map(|build| self.build_json(ctx, build, &repos)).collect())
+    }
+
+    pub async fn one_build_json(&self, ctx: &Ctx, id: i64) -> Result<Value, Failure> {
+        let build = self.build(id).await?.filter(|build| build.org_id == ctx.org_id).ok_or_else(Failure::not_found)?;
+        let (files, (deliveries, _)) = self.db.call(move |conn| Ok((artifacts(conn, id)?, activity(conn, id)?))).await?;
+        let mut found = self.build_json(ctx, &build, &self.shell.repos(ctx.org_id).await?);
+        found["files"] = files
+            .iter()
+            .map(|file| json!({ "name": file.name, "size": file.size, "sha256": file.sha256 }))
+            .collect();
+        found["published"] = deliveries
+            .iter()
+            .map(|(target, ok, output, at)| json!({ "target": target, "ok": ok, "output": output, "at": utc(*at) }))
+            .collect();
+        Ok(found)
+    }
+}
+
 async fn builds(
     State(builds): State<Builds>,
     Extension(ctx): Extension<Ctx>,
     Query(Search { q }): Query<Search>,
 ) -> Result<Html<String>, Failure> {
     let (org_id, wanted) = (ctx.org_id, q.clone());
-    let rows = builds
-        .db
-        .call(move |conn| {
-            conn.prepare(&format!(
-                "SELECT {BUILD_COLUMNS} FROM builds
-                 WHERE org_id = ?1 AND (?2 = '' OR instr(version, ?2) OR instr(commit_sha, ?2) OR instr(?2, commit_sha) AND commit_sha != '' OR branch = ?2 OR tag = ?2)
-                 ORDER BY id DESC LIMIT 200"
-            ))?
-            .query_map((org_id, wanted), build_row)?
-            .collect::<rusqlite::Result<Vec<Build>>>()
-        })
-        .await?;
+    let rows = builds.db.call(move |conn| search(conn, org_id, &wanted, 200)).await?;
     let repos = builds.shell.repos(org_id).await?;
     let repo = |id: i64| repos.iter().find(|repo| repo.id == id).map_or(("--", "?"), |repo| (repo_glyph(&repo.kind), repo.name.as_str()));
 

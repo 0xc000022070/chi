@@ -10,7 +10,7 @@ use flate2::read::GzDecoder;
 use maud::{Markup, html};
 use rusqlite::OptionalExtension;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use shell::{Ctx, Failure, Role, ago, now, org_page, secret, utc};
 
 use crate::{Bugs, envelope};
@@ -61,6 +61,66 @@ impl Bugs {
     }
 }
 
+const EVENT_KEYS: [&str; 11] = [
+    "message", "logentry", "exception", "tags", "release", "environment", "platform", "transaction", "request", "contexts", "breadcrumbs",
+];
+
+impl Bugs {
+    pub async fn issues_json(&self, ctx: &Ctx, status: &str, limit: i64) -> Result<Value, Failure> {
+        if !STATUSES.contains(&status) {
+            return Err(Failure::bad_request("status is open, resolved or ignored"));
+        }
+        let (org_id, status) = (ctx.org_id, status.to_owned());
+        let rows = self.db.call(move |conn| list_issues(conn, org_id, &status, limit)).await?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                json!({
+                    "id": row.id,
+                    "title": row.title,
+                    "culprit": row.culprit,
+                    "level": row.level,
+                    "events": row.count,
+                    "last_seen": utc(row.last_seen),
+                    "project": row.project,
+                    "url": self.shell.url(&ctx.href(&format!("/{BASE}/{}", row.id))),
+                })
+            })
+            .collect())
+    }
+
+    pub async fn issue_json(&self, ctx: &Ctx, id: i64) -> Result<Value, Failure> {
+        let org_id = ctx.org_id;
+        let detail = self.db.call(move |conn| load_issue(conn, id, org_id)).await?.ok_or_else(Failure::not_found)?;
+        let repo = match detail.repo_id {
+            Some(repo_id) => self.shell.repo(org_id, repo_id).await?.map(|repo| repo.url),
+            None => None,
+        };
+        let event = latest_event(&detail)?;
+        let latest: serde_json::Map<String, Value> =
+            EVENT_KEYS.iter().filter(|key| !event[**key].is_null()).map(|key| ((*key).to_owned(), event[*key].clone())).collect();
+        Ok(json!({
+            "id": id,
+            "title": detail.title,
+            "level": detail.level,
+            "status": detail.status,
+            "events": detail.count,
+            "first_seen": utc(detail.first_seen),
+            "last_seen": utc(detail.last_seen),
+            "project": detail.project,
+            "repo": repo,
+            "source_path_prefix": detail.path_prefix,
+            "url": self.shell.url(&ctx.href(&format!("/{BASE}/{id}"))),
+            "recent": detail
+                .recent
+                .iter()
+                .map(|(event_id, at, release)| json!({ "event_id": event_id, "received": utc(*at), "release": release }))
+                .collect::<Vec<_>>(),
+            "latest_event": latest,
+        }))
+    }
+}
+
 #[derive(Deserialize)]
 struct IssuesQuery {
     status: Option<String>,
@@ -76,6 +136,26 @@ struct IssueRow {
     project: String,
 }
 
+fn list_issues(conn: &rusqlite::Connection, org_id: i64, status: &str, limit: i64) -> rusqlite::Result<Vec<IssueRow>> {
+    conn.prepare(
+        "SELECT i.id, i.title, i.culprit, i.level, i.count, i.last_seen, p.name
+         FROM issues i JOIN projects p ON p.id = i.project_id
+         WHERE p.org_id = ?1 AND i.status = ?2 ORDER BY i.last_seen DESC LIMIT ?3",
+    )?
+    .query_map((org_id, status, limit), |row| {
+        Ok(IssueRow {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            culprit: row.get(2)?,
+            level: row.get(3)?,
+            count: row.get(4)?,
+            last_seen: row.get(5)?,
+            project: row.get(6)?,
+        })
+    })?
+    .collect()
+}
+
 async fn issues(
     State(bugs): State<Bugs>,
     Extension(ctx): Extension<Ctx>,
@@ -83,28 +163,7 @@ async fn issues(
 ) -> Result<Html<String>, Failure> {
     let status = query.status.unwrap_or_else(|| "open".to_owned());
     let (wanted, org_id) = (status.clone(), ctx.org_id);
-    let rows = bugs
-        .db
-        .call(move |conn| {
-            conn.prepare(
-                "SELECT i.id, i.title, i.culprit, i.level, i.count, i.last_seen, p.name
-                 FROM issues i JOIN projects p ON p.id = i.project_id
-                 WHERE p.org_id = ?1 AND i.status = ?2 ORDER BY i.last_seen DESC LIMIT 200",
-            )?
-            .query_map((org_id, wanted), |row| {
-                Ok(IssueRow {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    culprit: row.get(2)?,
-                    level: row.get(3)?,
-                    count: row.get(4)?,
-                    last_seen: row.get(5)?,
-                    project: row.get(6)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()
-        })
-        .await?;
+    let rows = bugs.db.call(move |conn| list_issues(conn, org_id, &wanted, 200)).await?;
 
     Ok(org_page(
         &ctx,
@@ -203,6 +262,14 @@ fn load_issue(conn: &rusqlite::Connection, id: i64, org_id: i64) -> rusqlite::Re
     Ok(Some(detail))
 }
 
+fn latest_event(detail: &IssueDetail) -> std::io::Result<Value> {
+    let mut json = Vec::new();
+    if let Some(payload) = &detail.latest {
+        GzDecoder::new(&payload[..]).read_to_end(&mut json)?;
+    }
+    Ok(serde_json::from_slice(&json).unwrap_or(Value::Null))
+}
+
 fn facts(detail: &IssueDetail, event: &Value) -> Markup {
     html! {
         dl {
@@ -293,11 +360,7 @@ async fn issue(
         None => String::new(),
     };
 
-    let mut json = Vec::new();
-    if let Some(payload) = &detail.latest {
-        GzDecoder::new(&payload[..]).read_to_end(&mut json)?;
-    }
-    let event: Value = serde_json::from_slice(&json).unwrap_or(Value::Null);
+    let event = latest_event(&detail)?;
 
     Ok(org_page(
         &ctx,
