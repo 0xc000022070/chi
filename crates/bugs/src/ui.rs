@@ -52,7 +52,7 @@ impl Bugs {
         Ok(html! {
             a href=(BASE) class=(if open > 0 { "hot" } else { "calm" }) { "[!] " (open) " open" }
             @if let Some((id, title, project, seen)) = latest {
-                a href={ (BASE) "/" (id) } {
+                a href={ (BASE) "/" (id) } title=(title) {
                     b { (project) } (title.chars().take(60).collect::<String>()) " · " (ago(seen))
                 }
             }

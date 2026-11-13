@@ -86,7 +86,19 @@ details.add summary::before{content:'+';font:600 13px/1 ui-monospace,monospace;c
 details.add[open] summary::before{content:'-'}
 .actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 h2+.dim{margin-top:-4px}
-#status{position:fixed;bottom:0;left:0;right:0;display:flex;gap:24px;align-items:center;height:36px;padding:0 16px;border-top:1px solid var(--line);background:var(--surface);font:13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);white-space:nowrap;overflow-x:auto}
+#status{position:fixed;bottom:0;left:0;right:0;display:flex;gap:24px;align-items:center;height:36px;padding:0 16px;border-top:1px solid var(--line);background:var(--surface);font:13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);white-space:nowrap;overflow:hidden;-webkit-touch-callout:none;user-select:none}
+.lane{flex:1;min-width:0;height:100%;overflow:hidden}
+.track{display:flex;width:max-content;height:100%}
+.track>span{display:flex;gap:24px;height:100%;padding-right:48px}
+.track>span+span{display:none}
+.run .track>span+span{display:flex}
+.run .track{animation:ticker linear infinite}
+.run:hover .track,.hold .track{animation-play-state:paused}
+@keyframes ticker{to{transform:translateX(-50%)}}
+#tip{position:fixed;left:12px;right:12px;bottom:44px;z-index:2;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--surface);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);overflow-wrap:anywhere;box-shadow:0 4px 16px rgb(0 0 0/.25)}
+#tip b:not(:first-child){margin-left:1ch}
+#tip b{margin-right:1ch;color:var(--ink);font-weight:500}
+#tip div{margin-top:6px;color:var(--ink)}
 #status a{display:flex;gap:8px;align-items:center;height:100%;color:inherit;text-decoration:none}
 #status a:hover{color:var(--ink)}
 #status b{font-weight:500;color:var(--ink)}
@@ -101,14 +113,25 @@ h2+.dim{margin-top:-4px}
 #get-app a{font-weight:500;color:var(--link)}
 #get-app button{height:36px;padding:0 12px;border:0;color:var(--muted)}
 @media(max-width:600px){nav{flex-wrap:wrap;height:auto;padding:6px 16px;overflow:visible}nav::after{content:'';order:1;flex-basis:100%}nav>a{order:2;padding:0 12px 0 0}nav>a:hover{background:none}dd:last-child{margin-bottom:0}main{padding-top:24px}h1{font-size:24px}form.stack{max-width:none}form.stack button{width:100%}dl{grid-template-columns:1fr;gap:0}dd{margin-bottom:12px}}
-@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}.run .track{animation:none}.lane{overflow-x:auto}}
 ";
 
 const ICON: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2318191b'/%3E%3Crect x='9' y='9' width='14' height='14' rx='3' fill='%23ff4a1f'/%3E%3C/svg%3E";
 
 const IN_APP: &str = "const u=navigator.userAgent;document.documentElement.className=u.includes('chi-app')?'app':/Android/.test(u)&&!localStorage.noapp?'android':''";
 
-const LIVE: &str = "const s=document.getElementById('status');async function tick(){if(document.hidden)return;try{const r=await fetch('status');if(!r.ok)throw 0;s.innerHTML=await r.text();s.className=''}catch{s.className='off'}}tick();setInterval(tick,10000);document.addEventListener('visibilitychange',tick)";
+const LIVE: &str = r#"const s=document.getElementById('status'),tip=document.getElementById('tip');let last,timer,held,skip=0;
+function fit(){const l=s.firstChild;if(!l)return;const w=l.firstChild.firstChild.scrollWidth;s.classList.toggle('run',w>l.clientWidth);l.firstChild.style.animationDuration=w/40+'s'}
+function paint(h){if(h===last)return;last=h;s.innerHTML='<div class=lane><div class=track><span>'+h+'</span><span inert>'+h+'</span></div></div>';fit()}
+async function tick(){if(document.hidden||held)return;try{const r=await fetch('status');if(!r.ok)throw 0;paint(await r.text());s.classList.remove('off')}catch{s.classList.add('off')}}
+function show(a){held=a;tip.replaceChildren(...a.cloneNode(true).childNodes);if(a.title&&!a.textContent.includes(a.title)){const d=document.createElement('div');d.textContent=a.title;tip.append(d)}tip.hidden=false}
+function up(){clearTimeout(timer);s.classList.remove('hold');tip.hidden=true;if(held)skip=Date.now();held=null}
+s.addEventListener('touchstart',e=>{const a=e.target.closest('a');if(!a)return;s.classList.add('hold');timer=setTimeout(show,450,a)},{passive:true});
+s.addEventListener('touchmove',()=>held||up(),{passive:true});
+s.addEventListener('touchend',up);s.addEventListener('touchcancel',up);
+s.addEventListener('click',e=>{if(Date.now()-skip<800)e.preventDefault()},true);
+s.addEventListener('contextmenu',e=>e.preventDefault());
+addEventListener('resize',fit);tick();setInterval(tick,10000);document.addEventListener('visibilitychange',tick)"#;
 
 pub const REPO_KINDS: [(&str, &str); 5] = [("backend", ">_"), ("mobile", "[]"), ("web", "<>"), ("library", "{}"), ("cli", "$_")];
 
@@ -171,6 +194,6 @@ pub fn org_page(ctx: &Ctx, title: &str, body: Markup) -> Html<String> {
             (logout())
         },
         body,
-        html! { footer #status aria-live="polite" {} script { (PreEscaped(LIVE)) } },
+        html! { div #tip hidden {} footer #status aria-live="polite" {} script { (PreEscaped(LIVE)) } },
     )
 }
