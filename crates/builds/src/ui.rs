@@ -60,7 +60,7 @@ fn short(commit: &str) -> &str {
 fn file_size(size: i64) -> String {
     match size {
         ..1024 => format!("{size} B"),
-        ..1_048_576 => format!("{:.0} KB", size as f64 / 1024.0),
+        1024..1_048_576 => format!("{:.0} KB", size as f64 / 1024.0),
         _ => format!("{:.1} MB", size as f64 / 1_048_576.0),
     }
 }
