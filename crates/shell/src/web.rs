@@ -15,23 +15,24 @@ use serde::Deserialize;
 use tower::Layer;
 
 use crate::{
-    Ctx, Failure, Pending, Role, Shell, client_ip, now, secret, sha256_hex, sso,
+    Ctx, Failure, Pending, Role, Shell, client_ip, now, oauth, secret, sha256_hex, sso,
     store::{self, Joined, Joiner, SessionUser},
     ui::{REPO_KINDS, glyph, hub_page, org_page, repo_glyph},
     url_encode,
 };
 
-const RESERVED: [&str; 7] = ["api", "login", "logout", "orgs", "invite", "sso", "callback"];
+const RESERVED: [&str; 11] =
+    ["api", "login", "logout", "orgs", "invite", "sso", "callback", "mcp", "authorize", "token", "register"];
 
 const COOKIE: &str = "chi_session";
-const SESSION_TTL: i64 = 30 * 86_400;
-const EXTERNAL_SESSION_TTL: i64 = 86_400;
+pub(crate) const SESSION_TTL: i64 = 30 * 86_400;
+pub(crate) const EXTERNAL_SESSION_TTL: i64 = 86_400;
 const INVITE_TTL: i64 = 7 * 86_400;
 pub(crate) const MIN_PASSWORD: usize = 10;
 
 #[derive(Clone)]
-struct Visit {
-    user: Option<SessionUser>,
+pub(crate) struct Visit {
+    pub(crate) user: Option<SessionUser>,
     token_hash: Option<String>,
 }
 
@@ -41,7 +42,7 @@ impl Visit {
     }
 }
 
-fn local_path(next: &str) -> &str {
+pub(crate) fn local_path(next: &str) -> &str {
     if next.starts_with('/') && !next.starts_with("//") && !next.contains('\\') { next } else { "/" }
 }
 
@@ -90,6 +91,7 @@ impl Shell {
             .route("/invite/{token}", get(invite_page).post(accept_invite))
             .route("/sso/{provider_id}", get(sso_start))
             .route("/callback", get(sso_callback))
+            .merge(oauth::routes())
             .route("/sans.woff2", get(|| async { font(include_bytes!("../fonts/sans.woff2")) }))
             .route("/mono.woff2", get(|| async { font(include_bytes!("../fonts/mono.woff2")) }))
             .with_state(self.clone())
@@ -188,18 +190,7 @@ async fn org_home(Extension(ctx): Extension<Ctx>) -> Redirect {
 async fn home(State(shell): State<Shell>, Extension(visit): Extension<Visit>) -> Result<Response, Failure> {
     let Some(user) = visit.user else { return Ok(Redirect::to("/login").into_response()) };
     let who = user.clone();
-    let orgs = shell
-        .db
-        .call(move |conn| {
-            let mut mine = Vec::new();
-            for org in store::orgs(conn)? {
-                if let Some(role) = store::role_in(conn, &who, org.id)? {
-                    mine.push((org, role));
-                }
-            }
-            Ok(mine)
-        })
-        .await?;
+    let orgs = shell.db.call(move |conn| store::orgs_of(conn, &who)).await?;
     let admin = user.admin && user.provider.is_none();
     Ok(hub_page(
         "orgs",

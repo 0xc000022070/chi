@@ -51,3 +51,16 @@ CREATE TABLE IF NOT EXISTS repos (
   token_hash TEXT NOT NULL UNIQUE,
   UNIQUE (org_id, name)
 );
+CREATE TABLE IF NOT EXISTS clients (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  redirect_uris TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS grants (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  provider_id INTEGER,
+  client_id TEXT NOT NULL REFERENCES clients(id),
+  expires_at INTEGER NOT NULL
+);

@@ -55,12 +55,22 @@ pub fn has_admin(conn: &Connection) -> Result<bool> {
 }
 
 pub fn session(conn: &Connection, token_hash: &str, now: i64) -> Result<Option<SessionUser>> {
+    holder(conn, "sessions", token_hash, now)
+}
+
+pub fn grant(conn: &Connection, token_hash: &str, now: i64) -> Result<Option<SessionUser>> {
+    holder(conn, "grants", token_hash, now)
+}
+
+fn holder(conn: &Connection, table: &str, token_hash: &str, now: i64) -> Result<Option<SessionUser>> {
     let row = conn
         .query_row(
-            "SELECT u.id, u.email, u.admin, s.provider_id, p.org_id, p.trusted
-             FROM sessions s JOIN users u ON u.id = s.user_id
+            &format!(
+                "SELECT u.id, u.email, u.admin, s.provider_id, p.org_id, p.trusted
+             FROM {table} s JOIN users u ON u.id = s.user_id
              LEFT JOIN providers p ON p.id = s.provider_id
-             WHERE s.token_hash = ?1 AND s.expires_at > ?2",
+             WHERE s.token_hash = ?1 AND s.expires_at > ?2"
+            ),
             (token_hash, now),
             |row| {
                 Ok((
@@ -118,6 +128,48 @@ pub fn create_session(
         (token_hash, user_id, provider_id, expires_at),
     )?;
     Ok(())
+}
+
+pub fn orgs_of(conn: &Connection, user: &SessionUser) -> Result<Vec<(Org, Role)>> {
+    let mut mine = Vec::new();
+    for org in orgs(conn)? {
+        if let Some(role) = role_in(conn, user, org.id)? {
+            mine.push((org, role));
+        }
+    }
+    Ok(mine)
+}
+
+pub fn create_grant(
+    conn: &Connection,
+    token_hash: &str,
+    user_id: i64,
+    provider_id: Option<i64>,
+    client_id: &str,
+    expires_at: i64,
+) -> Result<()> {
+    conn.execute("DELETE FROM grants WHERE expires_at < ?1", [crate::now()])?;
+    conn.execute(
+        "INSERT INTO grants (token_hash, user_id, provider_id, client_id, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        (token_hash, user_id, provider_id, client_id, expires_at),
+    )?;
+    Ok(())
+}
+
+pub fn create_client(conn: &Connection, id: &str, name: &str, redirect_uris: &[String]) -> Result<()> {
+    conn.execute(
+        "INSERT INTO clients (id, name, redirect_uris, created_at) VALUES (?1, ?2, ?3, ?4)",
+        (id, name, redirect_uris.join("\n"), crate::now()),
+    )?;
+    Ok(())
+}
+
+pub fn client(conn: &Connection, id: &str) -> Result<Option<(String, Vec<String>)>> {
+    conn.query_row("SELECT name, redirect_uris FROM clients WHERE id = ?1", [id], |row| {
+        let uris: String = row.get(1)?;
+        Ok((row.get(0)?, uris.lines().map(str::to_owned).collect()))
+    })
+    .optional()
 }
 
 pub fn create_invite(conn: &Connection, token_hash: &str, org_id: Option<i64>, role: Role, expires_at: i64) -> Result<()> {
@@ -378,6 +430,7 @@ pub fn delete_provider(conn: &mut Connection, org_id: i64, id: i64) -> Result<()
     )?;
     if owned {
         tx.execute("DELETE FROM sessions WHERE provider_id = ?1", [id])?;
+        tx.execute("DELETE FROM grants WHERE provider_id = ?1", [id])?;
         tx.execute("DELETE FROM identities WHERE provider_id = ?1", [id])?;
         tx.execute("DELETE FROM providers WHERE id = ?1", [id])?;
     }

@@ -181,6 +181,7 @@ dependencies = [
  "axum",
  "bugs",
  "builds",
+ "serde_json",
  "shell",
  "tokio",
 ]

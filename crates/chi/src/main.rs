@@ -1,4 +1,12 @@
-use axum::{Extension, Router, extract::State, response::Html, routing::get};
+mod mcp;
+
+use axum::{
+    Extension, Router,
+    extract::State,
+    middleware,
+    response::Html,
+    routing::{get, post},
+};
 use std::{os::unix::fs::PermissionsExt, path::PathBuf, process::ExitCode};
 
 const USAGE: &str = "usage: chi serve | chi push ... | chi passwd <email>
@@ -44,7 +52,11 @@ async fn serve() -> Result<(), String> {
     shell.bootstrap().await.map_err(|failure| failure.1)?;
 
     let live = Router::new().route("/status", get(status)).with_state((bugs.clone(), builds.clone()));
-    let app = shell.router(bugs.ui().merge(builds.ui()).merge(live), bugs.ingest().merge(builds.api()));
+    let mcp = Router::new()
+        .route("/mcp", post(mcp::serve))
+        .route_layer(middleware::from_fn_with_state(shell.clone(), shell::bearer))
+        .with_state((bugs.clone(), builds.clone()));
+    let app = shell.router(bugs.ui().merge(builds.ui()).merge(live), bugs.ingest().merge(builds.api()).merge(mcp));
     let listener = tokio::net::TcpListener::bind(&listen).await.map_err(|e| format!("{listen}: {e}"))?;
     println!("chi listening on {listen}");
     axum::serve(listener, app).await.map_err(|e| e.to_string())

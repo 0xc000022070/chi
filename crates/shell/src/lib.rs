@@ -1,3 +1,4 @@
+mod oauth;
 mod sso;
 mod store;
 mod ui;
@@ -20,6 +21,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
+pub use oauth::bearer;
 pub use store::Repo;
 pub use ui::{glyph, org_page, repo_glyph};
 
@@ -224,12 +226,29 @@ pub struct HookResult {
 pub struct Shell {
     db: Db,
     url: Arc<str>,
-    pending: Arc<Mutex<HashMap<String, (Pending, i64)>>>,
+    pending: Held<Pending>,
+    codes: Held<oauth::Code>,
     hooks: Arc<Vec<PathBuf>>,
     logins: Arc<Limiter>,
 }
 
+type Held<T> = Arc<Mutex<HashMap<String, (T, i64)>>>;
+
 const PENDING_TTL: i64 = 300;
+
+fn hold<T>(map: &Mutex<HashMap<String, (T, i64)>>, value: T) -> String {
+    let key = secret();
+    let now = now();
+    let mut map = map.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.retain(|_, (_, expires)| *expires > now);
+    map.insert(key.clone(), (value, now + PENDING_TTL));
+    key
+}
+
+fn take<T>(map: &Mutex<HashMap<String, (T, i64)>>, key: &str) -> Option<T> {
+    let (value, expires) = map.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(key)?;
+    (expires > now()).then_some(value)
+}
 const HOOK_TIMEOUT: Duration = Duration::from_secs(120);
 
 impl Shell {
@@ -244,6 +263,7 @@ impl Shell {
             db,
             url: url.into(),
             pending: Arc::default(),
+            codes: Arc::default(),
             hooks: Arc::new(hooks),
             logins: Arc::new(Limiter::new(0.05, 10.0)),
         })
@@ -254,17 +274,11 @@ impl Shell {
     }
 
     fn hold(&self, pending: Pending) -> String {
-        let key = secret();
-        let now = now();
-        let mut map = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        map.retain(|_, (_, expires)| *expires > now);
-        map.insert(key.clone(), (pending, now + PENDING_TTL));
-        key
+        hold(&self.pending, pending)
     }
 
     fn take(&self, key: &str) -> Option<Pending> {
-        let (pending, expires) = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(key)?;
-        (expires > now()).then_some(pending)
+        take(&self.pending, key)
     }
 
     pub async fn repos(&self, org_id: i64) -> Result<Vec<Repo>, Failure> {
@@ -373,9 +387,11 @@ pub fn set_password(data: &Path, email: &str, password: &str) -> Result<(), Stri
     if changed == 0 {
         return Err(format!("no user {email}"));
     }
-    conn.execute("DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = ?1)", [&email])
-        .map(drop)
-        .map_err(|e| e.to_string())
+    for table in ["sessions", "grants"] {
+        conn.execute(&format!("DELETE FROM {table} WHERE user_id = (SELECT id FROM users WHERE email = ?1)"), [&email])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

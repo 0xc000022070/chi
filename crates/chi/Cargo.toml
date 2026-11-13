@@ -7,5 +7,6 @@ edition.workspace = true
 axum.workspace = true
 builds.workspace = true
 bugs.workspace = true
+serde_json.workspace = true
 shell.workspace = true
 tokio.workspace = true
