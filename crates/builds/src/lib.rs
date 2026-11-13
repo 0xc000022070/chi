@@ -203,6 +203,7 @@ impl Builds {
                 (header::CONTENT_TYPE, kind.to_owned()),
                 (header::CONTENT_LENGTH, size.to_string()),
                 (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"")),
+                (header::CACHE_CONTROL, "private, no-store".to_owned()),
             ],
             Body::from_stream(tokio_util::io::ReaderStream::new(file)),
         )
