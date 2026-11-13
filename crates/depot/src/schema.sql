@@ -1,0 +1,38 @@
+CREATE TABLE IF NOT EXISTS builds (
+  id INTEGER PRIMARY KEY,
+  org_id INTEGER NOT NULL,
+  repo_id INTEGER NOT NULL,
+  version TEXT NOT NULL,
+  commit_sha TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  builder TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS builds_listing ON builds (org_id, id);
+CREATE TABLE IF NOT EXISTS artifacts (
+  id INTEGER PRIMARY KEY,
+  build_id INTEGER NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  UNIQUE (build_id, name)
+);
+CREATE TABLE IF NOT EXISTS deliveries (
+  id INTEGER PRIMARY KEY,
+  build_id INTEGER NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+  target TEXT NOT NULL,
+  ok INTEGER NOT NULL,
+  output TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS downloads (
+  id INTEGER PRIMARY KEY,
+  build_id INTEGER NOT NULL REFERENCES builds(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  who TEXT NOT NULL,
+  ip TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
