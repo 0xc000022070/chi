@@ -94,11 +94,16 @@ h2+.dim{margin-top:-4px}
 #status .calm{color:var(--good)}
 #status::after{content:'● live';margin-left:auto;color:var(--good)}
 #status.off::after{content:'○ offline';color:var(--bad)}
+.app nav>a{display:none}
 @media(max-width:600px){nav{flex-wrap:wrap;height:auto;padding:6px 16px;overflow:visible}nav::after{content:'';order:1;flex-basis:100%}nav>a{order:2;padding:0 12px 0 0}nav>a:hover{background:none}dd:last-child{margin-bottom:0}main{padding-top:24px}h1{font-size:24px}form.stack{max-width:none}form.stack button{width:100%}dl{grid-template-columns:1fr;gap:0}dd{margin-bottom:12px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 ";
 
-const LIVE: &str = "const s=document.getElementById('status');async function tick(){if(document.hidden)return;try{const r=await fetch('/status');if(!r.ok)throw 0;s.innerHTML=await r.text();s.className=''}catch{s.className='off'}}tick();setInterval(tick,10000);document.addEventListener('visibilitychange',tick)";
+const ICON: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2318191b'/%3E%3Crect x='9' y='9' width='14' height='14' rx='3' fill='%23ff4a1f'/%3E%3C/svg%3E";
+
+const IN_APP: &str = "if(navigator.userAgent.includes('chi-app'))document.documentElement.className='app'";
+
+const LIVE: &str = "const s=document.getElementById('status');async function tick(){if(document.hidden)return;try{const r=await fetch('status');if(!r.ok)throw 0;s.innerHTML=await r.text();s.className=''}catch{s.className='off'}}tick();setInterval(tick,10000);document.addEventListener('visibilitychange',tick)";
 
 pub const REPO_KINDS: [(&str, &str); 5] = [("backend", ">_"), ("mobile", "[]"), ("web", "<>"), ("library", "{}"), ("cli", "$_")];
 
@@ -110,7 +115,7 @@ pub fn glyph(text: &str) -> Markup {
     html! { span.glyph aria-hidden="true" { (text) } }
 }
 
-fn frame(title: &str, nav: Markup, body: Markup, tail: Markup) -> Html<String> {
+fn frame(title: &str, base: &str, nav: Markup, body: Markup, tail: Markup) -> Html<String> {
     Html(
         html! {
             (DOCTYPE)
@@ -119,7 +124,10 @@ fn frame(title: &str, nav: Markup, body: Markup, tail: Markup) -> Html<String> {
                     meta charset="utf-8";
                     meta name="viewport" content="width=device-width,initial-scale=1";
                     meta name="referrer" content="same-origin";
-                    title { (title) " · chimera" }
+                    base href=(base);
+                    link rel="icon" href=(ICON);
+                    script { (PreEscaped(IN_APP)) }
+                    title { (title) " · chi" }
                     style { (PreEscaped(CSS)) }
                 }
                 body { nav { (nav) } main { (body) } (tail) }
@@ -134,17 +142,18 @@ fn logout() -> Markup {
 }
 
 pub fn hub_page(title: &str, signed_in: bool, body: Markup) -> Html<String> {
-    frame(title, html! { b { a href="/" { "chimera" } } @if signed_in { (logout()) } }, body, html! {})
+    frame(title, "/", html! { b { a href="/" { "chi" } } @if signed_in { (logout()) } }, body, html! {})
 }
 
 pub fn org_page(ctx: &Ctx, title: &str, body: Markup) -> Html<String> {
     frame(
         title,
+        &ctx.href("/"),
         html! {
             b { a href="/" { (ctx.org_name) } }
-            a href="/faults" { (glyph("[!]")) "faults" }
-            a href="/depot" { (glyph("[#]")) "depot" }
-            a href="/settings" { (glyph("[~]")) "settings" }
+            a href="bugs" { (glyph("[!]")) "bugs" }
+            a href="builds" { (glyph("[#]")) "builds" }
+            a href="settings" { (glyph("[~]")) "settings" }
             (logout())
         },
         body,

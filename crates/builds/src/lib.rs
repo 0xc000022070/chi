@@ -34,7 +34,7 @@ const STALE_UPLOAD: i64 = 86_400;
 const PART: &str = ".part";
 
 #[derive(Clone)]
-pub struct Depot {
+pub struct Builds {
     db: Db,
     shell: Shell,
     dir: Arc<PathBuf>,
@@ -49,7 +49,7 @@ struct Build {
     version: String,
     commit: String,
     branch: String,
-    channel: String,
+    tag: String,
     builder: String,
     status: String,
     started_at: i64,
@@ -57,7 +57,7 @@ struct Build {
 }
 
 const BUILD_COLUMNS: &str =
-    "id, org_id, repo_id, version, commit_sha, branch, channel, builder, status, started_at, finished_at";
+    "id, org_id, repo_id, version, commit_sha, branch, tag, builder, status, started_at, finished_at";
 
 fn build_row(row: &rusqlite::Row) -> rusqlite::Result<Build> {
     Ok(Build {
@@ -67,7 +67,7 @@ fn build_row(row: &rusqlite::Row) -> rusqlite::Result<Build> {
         version: row.get(3)?,
         commit: row.get(4)?,
         branch: row.get(5)?,
-        channel: row.get(6)?,
+        tag: row.get(6)?,
         builder: row.get(7)?,
         status: row.get(8)?,
         started_at: row.get(9)?,
@@ -108,13 +108,13 @@ fn file_sha256(path: &FsPath) -> std::io::Result<String> {
     }
 }
 
-fn expire(conn: &Connection, repo_id: i64, channel: &str) -> rusqlite::Result<Vec<i64>> {
+fn expire(conn: &Connection, repo_id: i64, tag: &str) -> rusqlite::Result<Vec<i64>> {
     let old: Vec<i64> = conn
         .prepare(
-            "SELECT id FROM builds WHERE repo_id = ?1 AND channel = ?2 AND status = 'finished'
+            "SELECT id FROM builds WHERE repo_id = ?1 AND tag = ?2 AND status = 'finished'
              ORDER BY id DESC LIMIT -1 OFFSET ?3",
         )?
-        .query_map((repo_id, channel, KEPT_BUILDS_WITH_FILES), |row| row.get(0))?
+        .query_map((repo_id, tag, KEPT_BUILDS_WITH_FILES), |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     for build_id in &old {
         conn.execute("DELETE FROM artifacts WHERE build_id = ?1", [build_id])?;
@@ -122,11 +122,11 @@ fn expire(conn: &Connection, repo_id: i64, channel: &str) -> rusqlite::Result<Ve
     Ok(old)
 }
 
-impl Depot {
+impl Builds {
     pub fn open(data: &FsPath, shell: Shell) -> Result<Self, String> {
-        let dir = data.join("depot");
+        let dir = data.join("builds");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let db = Db::open(&data.join("depot.db"), include_str!("schema.sql")).map_err(|e| e.to_string())?;
+        let db = Db::open(&data.join("builds.db"), include_str!("schema.sql")).map_err(|e| e.to_string())?;
         Ok(Self {
             db,
             shell,
@@ -138,15 +138,15 @@ impl Depot {
 
     pub fn api(&self) -> Router {
         Router::new()
-            .route("/api/depot/builds", post(create_build))
-            .route("/api/depot/builds/{id}/artifacts/{name}", put(upload).get(api_download))
-            .route("/api/depot/builds/{id}/finish", post(finish))
-            .route("/api/depot/latest", get(latest))
+            .route("/api/builds", post(create_build))
+            .route("/api/builds/{id}/artifacts/{name}", put(upload).get(api_download))
+            .route("/api/builds/{id}/finish", post(finish))
+            .route("/api/builds/latest", get(latest))
             .with_state(self.clone())
     }
 
     pub fn ui(&self) -> Router {
-        Router::new().nest("/depot", ui::routes()).with_state(self.clone())
+        Router::new().nest("/builds", ui::routes()).with_state(self.clone())
     }
 
     fn build_dir(&self, build_id: i64) -> PathBuf {
@@ -221,9 +221,9 @@ impl Depot {
             "version": build.version,
             "commit": build.commit,
             "branch": build.branch,
-            "channel": build.channel,
+            "tag": build.tag,
             "builder": build.builder,
-            "url": format!("{home}/depot/builds/{build_id}"),
+            "url": format!("{home}/builds/{build_id}"),
             "artifacts": files.iter().map(|file| json!({
                 "name": file.name,
                 "size": file.size,
@@ -246,10 +246,10 @@ impl Depot {
     }
 
     fn deliver_in_background(&self, build_id: i64) {
-        let depot = self.clone();
+        let builds = self.clone();
         tokio::spawn(async move {
-            if let Err(Failure(_, message)) = depot.deliver(build_id).await {
-                eprintln!("depot: delivery of build {build_id} failed: {message}");
+            if let Err(Failure(_, message)) = builds.deliver(build_id).await {
+                eprintln!("builds: delivery of build {build_id} failed: {message}");
             }
         });
     }
@@ -262,26 +262,33 @@ struct NewBuild {
     commit: String,
     #[serde(default)]
     branch: String,
-    #[serde(default)]
-    channel: String,
+    #[serde(default = "prerelease")]
+    tag: String,
     #[serde(default)]
     builder: String,
     #[serde(default)]
     failed: bool,
 }
 
+fn prerelease() -> String {
+    "prerelease".to_owned()
+}
+
 async fn create_build(
-    State(depot): State<Depot>,
+    State(builds): State<Builds>,
     headers: HeaderMap,
     Json(new): Json<NewBuild>,
 ) -> Result<Json<Value>, Failure> {
-    let repo = depot.repo(&headers).await?;
-    let fields = [&new.version, &new.commit, &new.branch, &new.channel, &new.builder];
+    let repo = builds.repo(&headers).await?;
+    let fields = [&new.version, &new.commit, &new.branch, &new.tag, &new.builder];
     if new.version.is_empty() || fields.iter().any(|field| field.len() > 200) {
         return Err(Failure::bad_request("version is required and every field is at most 200 bytes"));
     }
+    if !["prerelease", "release"].contains(&new.tag.as_str()) {
+        return Err(Failure::bad_request("tag is prerelease or release"));
+    }
     let failed = new.failed;
-    let (id, stale) = depot
+    let (id, stale) = builds
         .db
         .call(move |conn| {
             let stale: Vec<i64> = conn
@@ -293,7 +300,7 @@ async fn create_build(
                 (now(), now() - STALE_UPLOAD),
             )?;
             conn.execute(
-                "INSERT INTO builds (org_id, repo_id, version, commit_sha, branch, channel, builder, status, started_at, finished_at)
+                "INSERT INTO builds (org_id, repo_id, version, commit_sha, branch, tag, builder, status, started_at, finished_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 (
                     repo.org_id,
@@ -301,7 +308,7 @@ async fn create_build(
                     new.version,
                     new.commit,
                     new.branch,
-                    new.channel,
+                    new.tag,
                     new.builder,
                     if failed { "failed" } else { "uploading" },
                     now(),
@@ -312,10 +319,10 @@ async fn create_build(
         })
         .await?;
     for build_id in stale {
-        let _ = tokio::fs::remove_dir_all(depot.build_dir(build_id)).await;
+        let _ = tokio::fs::remove_dir_all(builds.build_dir(build_id)).await;
     }
     if failed {
-        depot.deliver_in_background(id);
+        builds.deliver_in_background(id);
     }
     Ok(Json(json!({ "id": id })))
 }
@@ -329,19 +336,19 @@ struct Offset {
 /// Appends one chunk. A chunk is accepted only at the current end of the file, so
 /// a client that lost its place gets `409` with the size received and resumes there.
 async fn upload(
-    State(depot): State<Depot>,
+    State(builds): State<Builds>,
     Path((id, name)): Path<(i64, String)>,
     Query(Offset { offset }): Query<Offset>,
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response, Failure> {
-    let repo = depot.repo(&headers).await?;
-    let build = depot.own_build(&repo, id).await?;
+    let repo = builds.repo(&headers).await?;
+    let build = builds.own_build(&repo, id).await?;
     if build.status != "uploading" || !safe_name(&name) {
         return Err(Failure::bad_request("build is closed or the artifact name is not allowed"));
     }
-    let _one_at_a_time = depot.uploading.lock().await;
-    let dir = depot.build_dir(id);
+    let _one_at_a_time = builds.uploading.lock().await;
+    let dir = builds.build_dir(id);
     tokio::fs::create_dir_all(&dir).await?;
     let path = dir.join(format!("{name}{PART}"));
     let received = tokio::fs::metadata(&path).await.map_or(0, |meta| meta.len());
@@ -406,7 +413,7 @@ fn verify(dir: &std::path::Path, expected: &HashMap<String, String>) -> std::io:
     Ok(Ok(files))
 }
 
-fn close(conn: &mut rusqlite::Connection, id: i64, files: &[Artifact], repo_id: i64, channel: &str) -> rusqlite::Result<Vec<i64>> {
+fn close(conn: &mut rusqlite::Connection, id: i64, files: &[Artifact], repo_id: i64, tag: &str) -> rusqlite::Result<Vec<i64>> {
     let tx = conn.transaction()?;
     for file in files {
         tx.execute(
@@ -415,76 +422,76 @@ fn close(conn: &mut rusqlite::Connection, id: i64, files: &[Artifact], repo_id: 
         )?;
     }
     tx.execute("UPDATE builds SET status = 'finished', finished_at = ?2 WHERE id = ?1", (id, now()))?;
-    let expired = expire(&tx, repo_id, channel)?;
+    let expired = expire(&tx, repo_id, tag)?;
     tx.commit()?;
     Ok(expired)
 }
 
 async fn finish(
-    State(depot): State<Depot>,
+    State(builds): State<Builds>,
     Path(id): Path<i64>,
     headers: HeaderMap,
     Json(finish): Json<Finish>,
 ) -> Result<Json<Value>, Failure> {
-    let repo = depot.repo(&headers).await?;
-    let build = depot.own_build(&repo, id).await?;
+    let repo = builds.repo(&headers).await?;
+    let build = builds.own_build(&repo, id).await?;
     if build.status != "uploading" {
         return Err(Failure::bad_request("build is already closed"));
     }
-    let _one_at_a_time = depot.uploading.lock().await;
-    let dir = depot.build_dir(id);
+    let _one_at_a_time = builds.uploading.lock().await;
+    let dir = builds.build_dir(id);
     let checked = tokio::task::spawn_blocking(move || verify(&dir, &finish.artifacts)).await??;
     let files = checked.map_err(|message| Failure(StatusCode::UNPROCESSABLE_ENTITY, message))?;
 
-    let (repo_id, channel) = (build.repo_id, build.channel);
-    let expired = depot.db.call(move |conn| close(conn, id, &files, repo_id, &channel)).await?;
+    let (repo_id, tag) = (build.repo_id, build.tag);
+    let expired = builds.db.call(move |conn| close(conn, id, &files, repo_id, &tag)).await?;
     for build_id in expired {
-        let _ = tokio::fs::remove_dir_all(depot.build_dir(build_id)).await;
+        let _ = tokio::fs::remove_dir_all(builds.build_dir(build_id)).await;
     }
-    depot.deliver_in_background(id);
-    let home = depot.shell.org_address(build.org_id).await?.map(|(_, home)| home).unwrap_or_default();
-    Ok(Json(json!({ "id": id, "url": format!("{home}/depot/builds/{id}") })))
+    builds.deliver_in_background(id);
+    let home = builds.shell.org_address(build.org_id).await?.map(|(_, home)| home).unwrap_or_default();
+    Ok(Json(json!({ "id": id, "url": format!("{home}/builds/{id}") })))
 }
 
 async fn api_download(
-    State(depot): State<Depot>,
+    State(builds): State<Builds>,
     Path((id, name)): Path<(i64, String)>,
     headers: HeaderMap,
 ) -> Result<Response, Failure> {
-    let repo = depot.repo(&headers).await?;
-    let build = depot.own_build(&repo, id).await?;
-    depot.serve(build.id, &name, format!("token:{}", repo.name), client_ip(&headers)).await
+    let repo = builds.repo(&headers).await?;
+    let build = builds.own_build(&repo, id).await?;
+    builds.serve(build.id, &name, format!("token:{}", repo.name), client_ip(&headers)).await
 }
 
 #[derive(Deserialize)]
 struct Latest {
     name: String,
-    #[serde(default)]
-    channel: String,
+    #[serde(default = "prerelease")]
+    tag: String,
 }
 
 async fn latest(
-    State(depot): State<Depot>,
+    State(builds): State<Builds>,
     Query(query): Query<Latest>,
     headers: HeaderMap,
 ) -> Result<Response, Failure> {
-    let repo = depot.repo(&headers).await?;
-    let (repo_id, name, channel) = (repo.id, query.name.clone(), query.channel);
-    let build_id: Option<i64> = depot
+    let repo = builds.repo(&headers).await?;
+    let (repo_id, name, tag) = (repo.id, query.name.clone(), query.tag);
+    let build_id: Option<i64> = builds
         .db
         .call(move |conn| {
             conn.query_row(
                 "SELECT b.id FROM builds b JOIN artifacts a ON a.build_id = b.id
-                 WHERE b.repo_id = ?1 AND b.channel = ?2 AND b.status = 'finished' AND a.name = ?3
+                 WHERE b.repo_id = ?1 AND b.tag = ?2 AND b.status = 'finished' AND a.name = ?3
                  ORDER BY b.id DESC LIMIT 1",
-                (repo_id, channel, name),
+                (repo_id, tag, name),
                 |row| row.get(0),
             )
             .optional()
         })
         .await?;
     let build_id = build_id.ok_or_else(Failure::not_found)?;
-    depot.serve(build_id, &query.name, format!("token:{}", repo.name), client_ip(&headers)).await
+    builds.serve(build_id, &query.name, format!("token:{}", repo.name), client_ip(&headers)).await
 }
 
 #[cfg(test)]
@@ -504,16 +511,16 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(include_str!("schema.sql")).unwrap();
         for id in 1..=KEPT_BUILDS_WITH_FILES + 2 {
-            let channel = if id == 2 { "production" } else { "staging" };
+            let tag = if id == 2 { "release" } else { "prerelease" };
             conn.execute(
-                "INSERT INTO builds (id, org_id, repo_id, version, commit_sha, branch, channel, builder, status, started_at)
+                "INSERT INTO builds (id, org_id, repo_id, version, commit_sha, branch, tag, builder, status, started_at)
                  VALUES (?1, 1, 1, 'v', '', '', ?2, '', 'finished', 0)",
-                (id, channel),
+                (id, tag),
             )
             .unwrap();
             conn.execute("INSERT INTO artifacts (build_id, name, size, sha256) VALUES (?1, 'a.apk', 1, '')", [id]).unwrap();
         }
-        assert_eq!(expire(&conn, 1, "staging").unwrap(), [1]);
+        assert_eq!(expire(&conn, 1, "prerelease").unwrap(), [1]);
         let left: i64 = conn.query_row("SELECT COUNT(*) FROM artifacts", [], |row| row.get(0)).unwrap();
         assert_eq!(left, KEPT_BUILDS_WITH_FILES + 1);
         let rows: i64 = conn.query_row("SELECT COUNT(*) FROM builds", [], |row| row.get(0)).unwrap();
@@ -522,7 +529,7 @@ mod tests {
 
     #[test]
     fn sha256_of_a_file_matches_the_known_digest() {
-        let path = std::env::temp_dir().join(format!("chimera-sha-{}", shell::secret()));
+        let path = std::env::temp_dir().join(format!("chi-sha-{}", shell::secret()));
         std::fs::write(&path, b"abc").unwrap();
         let digest = file_sha256(&path).unwrap();
         std::fs::remove_file(&path).unwrap();

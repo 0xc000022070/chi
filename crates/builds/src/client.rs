@@ -9,8 +9,8 @@ use serde_json::{Map, Value, json};
 use crate::file_sha256;
 
 const CHUNK: usize = 32 * 1024 * 1024;
-const USAGE: &str = "usage: chimera push --url URL --version V [--commit SHA] [--branch B] [--channel C] [--builder NAME] [--failed] FILE...
-the upload token is read from CHIMERA_TOKEN";
+const USAGE: &str = "usage: chi push --url URL --version V [--commit SHA] [--branch B] [--tag prerelease|release] [--builder NAME] [--failed] FILE...
+the upload token is read from CHI_TOKEN";
 
 fn explain(error: ureq::Error) -> String {
     match error {
@@ -34,7 +34,7 @@ fn upload(base: &str, auth: &str, build: i64, path: &Path, name: &str) -> Result
             }
             filled += read;
         }
-        let sent = ureq::put(&format!("{base}/api/depot/builds/{build}/artifacts/{name}?offset={offset}"))
+        let sent = ureq::put(&format!("{base}/api/builds/{build}/artifacts/{name}?offset={offset}"))
             .set("authorization", auth)
             .send_bytes(&buffer[..filled]);
         let answer: Value = match sent {
@@ -61,7 +61,7 @@ fn parse(args: &[String]) -> Result<Request<'_>, String> {
         match arg.as_str() {
             "--failed" => drop(request.fields.insert("failed".to_owned(), json!(true))),
             "--url" => request.base = args.next().ok_or(USAGE)?.trim_end_matches('/').to_owned(),
-            "--version" | "--commit" | "--branch" | "--channel" | "--builder" => {
+            "--version" | "--commit" | "--branch" | "--tag" | "--builder" => {
                 request.fields.insert(arg[2..].to_owned(), json!(args.next().ok_or(USAGE)?));
             }
             flag if flag.starts_with("--") => return Err(USAGE.to_owned()),
@@ -84,7 +84,7 @@ fn post(url: &str, auth: &str, body: Value) -> Result<Value, String> {
 
 pub fn push(args: &[String]) -> Result<(), String> {
     let Request { base, fields, files } = parse(args)?;
-    let auth = format!("Bearer {}", std::env::var("CHIMERA_TOKEN").map_err(|_| USAGE)?);
+    let auth = format!("Bearer {}", std::env::var("CHI_TOKEN").map_err(|_| USAGE)?);
 
     let mut digests = Map::new();
     for file in &files {
@@ -93,7 +93,7 @@ pub fn push(args: &[String]) -> Result<(), String> {
     }
 
     let failed = fields.contains_key("failed");
-    let created = post(&format!("{base}/api/depot/builds"), &auth, Value::Object(fields))?;
+    let created = post(&format!("{base}/api/builds"), &auth, Value::Object(fields))?;
     let build = created["id"].as_i64().ok_or("server did not return a build id")?;
     if failed {
         println!("reported failed build {build}");
@@ -102,7 +102,7 @@ pub fn push(args: &[String]) -> Result<(), String> {
     for file in &files {
         upload(&base, &auth, build, file, file_name(file)?)?;
     }
-    let finished = post(&format!("{base}/api/depot/builds/{build}/finish"), &auth, json!({ "artifacts": digests }))?;
+    let finished = post(&format!("{base}/api/builds/{build}/finish"), &auth, json!({ "artifacts": digests }))?;
     println!("{}", finished["url"].as_str().unwrap_or_default());
     Ok(())
 }

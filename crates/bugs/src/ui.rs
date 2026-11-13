@@ -13,22 +13,22 @@ use serde::Deserialize;
 use serde_json::Value;
 use shell::{Ctx, Failure, Role, ago, now, org_page, secret, utc};
 
-use crate::{Faults, envelope};
+use crate::{Bugs, envelope};
 
-const BASE: &str = "/faults";
+const BASE: &str = "bugs";
 const STATUSES: [&str; 3] = ["open", "resolved", "ignored"];
 
-pub fn routes() -> Router<Faults> {
+pub fn routes() -> Router<Bugs> {
     Router::new()
         .route("/", get(issues))
-        .route("/issues/{id}", get(issue))
-        .route("/issues/{id}/status", post(set_status))
+        .route("/{id}", get(issue))
+        .route("/{id}/status", post(set_status))
         .route("/projects", get(projects).post(create_project))
         .route("/projects/{id}/keys", post(create_key))
         .route("/keys/{key}/revoke", post(revoke_key))
 }
 
-impl Faults {
+impl Bugs {
     pub async fn pulse(&self, org_id: i64) -> Result<String, Failure> {
         let (open, latest) = self
             .db
@@ -52,7 +52,7 @@ impl Faults {
         Ok(html! {
             a href=(BASE) class=(if open > 0 { "hot" } else { "calm" }) { "[!] " (open) " open" }
             @if let Some((id, title, project, seen)) = latest {
-                a href={ (BASE) "/issues/" (id) } {
+                a href={ (BASE) "/" (id) } {
                     b { (project) } (title.chars().take(60).collect::<String>()) " · " (ago(seen))
                 }
             }
@@ -77,13 +77,13 @@ struct IssueRow {
 }
 
 async fn issues(
-    State(faults): State<Faults>,
+    State(bugs): State<Bugs>,
     Extension(ctx): Extension<Ctx>,
     Query(query): Query<IssuesQuery>,
 ) -> Result<Html<String>, Failure> {
     let status = query.status.unwrap_or_else(|| "open".to_owned());
     let (wanted, org_id) = (status.clone(), ctx.org_id);
-    let rows = faults
+    let rows = bugs
         .db
         .call(move |conn| {
             conn.prepare(
@@ -108,7 +108,7 @@ async fn issues(
 
     Ok(org_page(
         &ctx,
-        "faults",
+        "bugs",
         html! {
             div.tabs {
                 @for tab in STATUSES {
@@ -118,7 +118,7 @@ async fn issues(
             }
             @if rows.is_empty() { p.dim { "Nothing here." } }
             @for row in &rows {
-                a.row href={ (BASE) "/issues/" (row.id) } {
+                a.row href={ (BASE) "/" (row.id) } {
                     strong { (row.title) }
                     span { (row.culprit) }
                     br;
@@ -214,7 +214,7 @@ fn facts(detail: &IssueDetail, event: &Value) -> Markup {
             dt { "last seen" } dd { (utc(detail.last_seen)) }
             @if let Some(environment) = event["environment"].as_str() { dt { "environment" } dd { (environment) } }
             @if let Some(release) = event["release"].as_str() {
-                dt { "release" } dd { a href={ "/depot?q=" (shell::url_encode(release)) } { (release) } }
+                dt { "release" } dd { a href={ "builds?q=" (shell::url_encode(release)) } { (release) } }
             }
             @if let Some(user) = event["user"]["id"].as_str() { dt { "user" } dd { (user) } }
         }
@@ -226,7 +226,7 @@ fn status_buttons(id: i64, current: &str) -> Markup {
         p {
             @for status in STATUSES {
                 @if status != current {
-                    form.inline method="post" action={ (BASE) "/issues/" (id) "/status" } {
+                    form.inline method="post" action={ (BASE) "/" (id) "/status" } {
                         button name="status" value=(status) { "Mark " (status) }
                     }
                     " "
@@ -282,14 +282,14 @@ fn attachments(detail: &IssueDetail, event: &Value) -> Markup {
 }
 
 async fn issue(
-    State(faults): State<Faults>,
+    State(bugs): State<Bugs>,
     Extension(ctx): Extension<Ctx>,
     Path(id): Path<i64>,
 ) -> Result<Html<String>, Failure> {
     let org_id = ctx.org_id;
-    let detail = faults.db.call(move |conn| load_issue(conn, id, org_id)).await?.ok_or_else(Failure::not_found)?;
+    let detail = bugs.db.call(move |conn| load_issue(conn, id, org_id)).await?.ok_or_else(Failure::not_found)?;
     let repo = match detail.repo_id {
-        Some(repo_id) => faults.shell.repo(org_id, repo_id).await?.map(|repo| repo.url).unwrap_or_default(),
+        Some(repo_id) => bugs.shell.repo(org_id, repo_id).await?.map(|repo| repo.url).unwrap_or_default(),
         None => String::new(),
     };
 
@@ -318,7 +318,7 @@ struct StatusForm {
 }
 
 async fn set_status(
-    State(faults): State<Faults>,
+    State(bugs): State<Bugs>,
     Extension(ctx): Extension<Ctx>,
     Path(id): Path<i64>,
     Form(form): Form<StatusForm>,
@@ -328,7 +328,7 @@ async fn set_status(
         return Err(Failure::bad_request("unknown status"));
     }
     let org_id = ctx.org_id;
-    faults
+    bugs
         .db
         .call(move |conn| {
             conn.execute(
@@ -337,7 +337,7 @@ async fn set_status(
             )
         })
         .await?;
-    Ok(Redirect::to(&format!("{BASE}/issues/{id}")))
+    Ok(Redirect::to(&ctx.href(&format!("/{BASE}/{id}"))))
 }
 
 struct ProjectRow {
@@ -347,9 +347,9 @@ struct ProjectRow {
     keys: Vec<(String, String)>,
 }
 
-async fn projects(State(faults): State<Faults>, Extension(ctx): Extension<Ctx>) -> Result<Html<String>, Failure> {
+async fn projects(State(bugs): State<Bugs>, Extension(ctx): Extension<Ctx>) -> Result<Html<String>, Failure> {
     let org_id = ctx.org_id;
-    let rows = faults
+    let rows = bugs
         .db
         .call(move |conn| {
             let mut rows = conn
@@ -367,8 +367,8 @@ async fn projects(State(faults): State<Faults>, Extension(ctx): Extension<Ctx>) 
             Ok(rows)
         })
         .await?;
-    let repos = faults.shell.repos(org_id).await?;
-    let hub = faults.shell.hub_url("");
+    let repos = bugs.shell.repos(org_id).await?;
+    let hub = bugs.shell.url("");
     let (scheme, host) = hub.split_once("://").unwrap_or(("https", &hub));
     let maintainer = ctx.role >= Role::Maintainer;
 
@@ -427,10 +427,10 @@ struct ProjectForm {
     path_prefix: String,
 }
 
-async fn add_key(faults: &Faults, org_id: i64, project_id: i64, label: String) -> Result<(), Failure> {
+async fn add_key(bugs: &Bugs, org_id: i64, project_id: i64, label: String) -> Result<(), Failure> {
     let key = secret()[..32].to_owned();
     let stored = key.clone();
-    let added = faults
+    let added = bugs
         .db
         .call(move |conn| {
             conn.execute(
@@ -443,12 +443,12 @@ async fn add_key(faults: &Faults, org_id: i64, project_id: i64, label: String) -
     if added == 0 {
         return Err(Failure::not_found());
     }
-    faults.keys.write().expect("no holder of the key cache panics").insert(key, project_id);
+    bugs.keys.write().expect("no holder of the key cache panics").insert(key, project_id);
     Ok(())
 }
 
 async fn create_project(
-    State(faults): State<Faults>,
+    State(bugs): State<Bugs>,
     Extension(ctx): Extension<Ctx>,
     Form(form): Form<ProjectForm>,
 ) -> Result<Redirect, Failure> {
@@ -458,11 +458,11 @@ async fn create_project(
         return Err(Failure::bad_request("a name is required"));
     }
     let repo_id = match form.repo_id.parse::<i64>() {
-        Ok(repo_id) => Some(faults.shell.repo(ctx.org_id, repo_id).await?.ok_or_else(Failure::not_found)?.id),
+        Ok(repo_id) => Some(bugs.shell.repo(ctx.org_id, repo_id).await?.ok_or_else(Failure::not_found)?.id),
         Err(_) => None,
     };
     let org_id = ctx.org_id;
-    let project_id = faults
+    let project_id = bugs
         .db
         .call(move |conn| {
             let created = conn.execute(
@@ -473,8 +473,8 @@ async fn create_project(
         })
         .await?
         .ok_or_else(|| Failure::bad_request("a project with that name exists"))?;
-    add_key(&faults, org_id, project_id, "default".to_owned()).await?;
-    Ok(Redirect::to(&format!("{BASE}/projects")))
+    add_key(&bugs, org_id, project_id, "default".to_owned()).await?;
+    Ok(Redirect::to(&ctx.href(&format!("/{BASE}/projects"))))
 }
 
 #[derive(Deserialize)]
@@ -483,24 +483,24 @@ struct KeyForm {
 }
 
 async fn create_key(
-    State(faults): State<Faults>,
+    State(bugs): State<Bugs>,
     Extension(ctx): Extension<Ctx>,
     Path(project_id): Path<i64>,
     Form(form): Form<KeyForm>,
 ) -> Result<Redirect, Failure> {
     ctx.require(Role::Maintainer)?;
-    add_key(&faults, ctx.org_id, project_id, form.label.trim().to_owned()).await?;
-    Ok(Redirect::to(&format!("{BASE}/projects")))
+    add_key(&bugs, ctx.org_id, project_id, form.label.trim().to_owned()).await?;
+    Ok(Redirect::to(&ctx.href(&format!("/{BASE}/projects"))))
 }
 
 async fn revoke_key(
-    State(faults): State<Faults>,
+    State(bugs): State<Bugs>,
     Extension(ctx): Extension<Ctx>,
     Path(key): Path<String>,
 ) -> Result<Redirect, Failure> {
     ctx.require(Role::Maintainer)?;
     let (org_id, stored) = (ctx.org_id, key.clone());
-    let revoked = faults
+    let revoked = bugs
         .db
         .call(move |conn| {
             conn.execute(
@@ -510,9 +510,9 @@ async fn revoke_key(
         })
         .await?;
     if revoked == 1 {
-        faults.keys.write().expect("no holder of the key cache panics").remove(&key);
+        bugs.keys.write().expect("no holder of the key cache panics").remove(&key);
     }
-    Ok(Redirect::to(&format!("{BASE}/projects")))
+    Ok(Redirect::to(&ctx.href(&format!("/{BASE}/projects"))))
 }
 
 #[cfg(test)]

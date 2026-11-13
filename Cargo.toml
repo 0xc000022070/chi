@@ -22,8 +22,8 @@ tokio-util = { version = "0.7", features = ["io"] }
 tower = { version = "0.5", features = ["util"] }
 ureq = { version = "2", features = ["json"] }
 shell = { path = "crates/shell" }
-faults = { path = "crates/faults" }
-depot = { path = "crates/depot" }
+bugs = { path = "crates/bugs" }
+builds = { path = "crates/builds" }
 
 [profile.release]
 opt-level = "s"

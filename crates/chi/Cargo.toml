@@ -1,11 +1,11 @@
 [package]
-name = "chimera"
+name = "chi"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 axum.workspace = true
-depot.workspace = true
-faults.workspace = true
+builds.workspace = true
+bugs.workspace = true
 shell.workspace = true
 tokio.workspace = true

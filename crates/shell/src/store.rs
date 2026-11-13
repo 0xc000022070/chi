@@ -7,7 +7,6 @@ pub struct Org {
     pub id: i64,
     pub slug: String,
     pub name: String,
-    pub host: String,
 }
 
 #[derive(Clone)]
@@ -36,33 +35,33 @@ pub struct SessionUser {
 }
 
 fn org_row(row: &rusqlite::Row) -> Result<Org> {
-    Ok(Org { id: row.get(0)?, slug: row.get(1)?, name: row.get(2)?, host: row.get(3)? })
+    Ok(Org { id: row.get(0)?, slug: row.get(1)?, name: row.get(2)? })
 }
 
-pub fn org_by_host(conn: &Connection, host: &str) -> Result<Option<Org>> {
-    conn.query_row("SELECT id, slug, name, host FROM orgs WHERE host = ?1", [host], org_row).optional()
+pub fn org_by_slug(conn: &Connection, slug: &str) -> Result<Option<Org>> {
+    conn.query_row("SELECT id, slug, name FROM orgs WHERE slug = ?1", [slug], org_row).optional()
 }
 
 pub fn org(conn: &Connection, org_id: i64) -> Result<Option<Org>> {
-    conn.query_row("SELECT id, slug, name, host FROM orgs WHERE id = ?1", [org_id], org_row).optional()
+    conn.query_row("SELECT id, slug, name FROM orgs WHERE id = ?1", [org_id], org_row).optional()
 }
 
 pub fn orgs(conn: &Connection) -> Result<Vec<Org>> {
-    conn.prepare("SELECT id, slug, name, host FROM orgs ORDER BY name")?.query_map([], org_row)?.collect()
+    conn.prepare("SELECT id, slug, name FROM orgs ORDER BY name")?.query_map([], org_row)?.collect()
 }
 
 pub fn has_admin(conn: &Connection) -> Result<bool> {
     conn.query_row("SELECT EXISTS(SELECT 1 FROM users WHERE admin = 1)", [], |row| row.get(0))
 }
 
-pub fn session(conn: &Connection, token_hash: &str, host: &str, now: i64) -> Result<Option<SessionUser>> {
+pub fn session(conn: &Connection, token_hash: &str, now: i64) -> Result<Option<SessionUser>> {
     let row = conn
         .query_row(
             "SELECT u.id, u.email, u.admin, s.provider_id, p.org_id, p.trusted
              FROM sessions s JOIN users u ON u.id = s.user_id
              LEFT JOIN providers p ON p.id = s.provider_id
-             WHERE s.token_hash = ?1 AND s.host = ?2 AND s.expires_at > ?3",
-            (token_hash, host, now),
+             WHERE s.token_hash = ?1 AND s.expires_at > ?2",
+            (token_hash, now),
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -110,14 +109,13 @@ pub fn create_session(
     conn: &Connection,
     token_hash: &str,
     user_id: i64,
-    host: &str,
     provider_id: Option<i64>,
     expires_at: i64,
 ) -> Result<()> {
     conn.execute("DELETE FROM sessions WHERE expires_at < ?1", [crate::now()])?;
     conn.execute(
-        "INSERT INTO sessions (token_hash, user_id, host, provider_id, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        (token_hash, user_id, host, provider_id, expires_at),
+        "INSERT INTO sessions (token_hash, user_id, provider_id, expires_at) VALUES (?1, ?2, ?3, ?4)",
+        (token_hash, user_id, provider_id, expires_at),
     )?;
     Ok(())
 }
@@ -199,7 +197,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(include_str!("schema.sql")).unwrap();
         conn.execute_batch(
-            "INSERT INTO orgs (id, slug, name, host) VALUES (1, 'a', 'A', 'a.test'), (2, 'b', 'B', 'b.test');
+            "INSERT INTO orgs (id, slug, name) VALUES (1, 'a', 'A'), (2, 'b', 'B');
              INSERT INTO users (id, email, admin, created_at) VALUES (1, 'root@x', 1, 0), (2, 'dev@x', 0, 0);
              INSERT INTO memberships VALUES (2, 1, 'owner'), (2, 2, 'maintainer');
              INSERT INTO providers (id, org_id, name, issuer, client_id, trusted) VALUES (1, 1, 'prod', '', '', 1), (2, 1, 'staging', '', '', 0);",
@@ -227,11 +225,10 @@ mod tests {
     #[test]
     fn session_from_a_removed_provider_is_dead() {
         let conn = seeded();
-        create_session(&conn, "h", 2, "a.test", Some(2), i64::MAX).unwrap();
-        assert!(session(&conn, "h", "a.test", 0).unwrap().is_some());
-        assert!(session(&conn, "h", "b.test", 0).unwrap().is_none());
+        create_session(&conn, "h", 2, Some(2), i64::MAX).unwrap();
+        assert!(session(&conn, "h", 0).unwrap().is_some());
         conn.execute_batch("PRAGMA foreign_keys = OFF; DELETE FROM providers WHERE id = 2;").unwrap();
-        assert!(session(&conn, "h", "a.test", 0).unwrap().is_none());
+        assert!(session(&conn, "h", 0).unwrap().is_none());
     }
 
     #[test]
@@ -318,11 +315,8 @@ pub fn accept_invite(conn: &mut Connection, token_hash: &str, now: i64, joiner: 
     Ok(Joined::User(user_id))
 }
 
-pub fn create_org(conn: &Connection, slug: &str, name: &str, host: &str) -> Result<bool> {
-    let created = conn.execute(
-        "INSERT INTO orgs (slug, name, host) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING",
-        (slug, name, host),
-    )?;
+pub fn create_org(conn: &Connection, slug: &str, name: &str) -> Result<bool> {
+    let created = conn.execute("INSERT INTO orgs (slug, name) VALUES (?1, ?2) ON CONFLICT DO NOTHING", (slug, name))?;
     Ok(created == 1)
 }
 

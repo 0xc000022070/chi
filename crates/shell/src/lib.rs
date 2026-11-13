@@ -192,6 +192,7 @@ impl Role {
 pub struct Ctx {
     pub org_id: i64,
     pub org_name: String,
+    pub slug: String,
     pub user_id: i64,
     pub email: String,
     pub role: Role,
@@ -201,11 +202,16 @@ impl Ctx {
     pub fn require(&self, role: Role) -> Result<(), Failure> {
         if self.role >= role { Ok(()) } else { Err(Failure::forbidden()) }
     }
+
+    pub fn href(&self, path: &str) -> String {
+        format!("/{}{path}", self.slug)
+    }
 }
 
-enum Pending {
-    Handoff { user_id: i64, provider_id: Option<i64>, host: String },
-    Sso { provider_id: i64, verifier: String, to: String, next: String },
+struct Pending {
+    provider_id: i64,
+    verifier: String,
+    next: String,
 }
 
 pub struct HookResult {
@@ -217,8 +223,7 @@ pub struct HookResult {
 #[derive(Clone)]
 pub struct Shell {
     db: Db,
-    hub_host: Arc<str>,
-    scheme: &'static str,
+    url: Arc<str>,
     pending: Arc<Mutex<HashMap<String, (Pending, i64)>>>,
     hooks: Arc<Vec<PathBuf>>,
     logins: Arc<Limiter>,
@@ -228,30 +233,24 @@ const PENDING_TTL: i64 = 300;
 const HOOK_TIMEOUT: Duration = Duration::from_secs(120);
 
 impl Shell {
-    pub fn open(data: &Path, hub_url: &str, hooks: Vec<PathBuf>) -> Result<Self, String> {
-        let (scheme, host) = match hub_url.trim_end_matches('/').split_once("://") {
-            Some(("https", host)) => ("https", host),
-            Some(("http", host)) => ("http", host),
-            _ => return Err(format!("hub url must start with http:// or https://: {hub_url}")),
-        };
-        let db = Db::open(&data.join("chimera.db"), include_str!("schema.sql")).map_err(|e| e.to_string())?;
+    pub fn open(data: &Path, url: &str, hooks: Vec<PathBuf>) -> Result<Self, String> {
+        let url = url.trim_end_matches('/');
+        if !(url.starts_with("https://") || url.starts_with("http://")) {
+            return Err(format!("the url must start with http:// or https://: {url}"));
+        }
+        let db = Db::open(&data.join("chi.db"), include_str!("schema.sql")).map_err(|e| e.to_string())?;
         add_repo_kind(&db.0.lock().expect("nothing else holds the connection yet")).map_err(|e| e.to_string())?;
         Ok(Self {
             db,
-            hub_host: host.into(),
-            scheme,
+            url: url.into(),
             pending: Arc::default(),
             hooks: Arc::new(hooks),
             logins: Arc::new(Limiter::new(0.05, 10.0)),
         })
     }
 
-    pub fn url(&self, host: &str, path: &str) -> String {
-        format!("{}://{host}{path}", self.scheme)
-    }
-
-    pub fn hub_url(&self, path: &str) -> String {
-        self.url(&self.hub_host, path)
+    pub fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.url)
     }
 
     fn hold(&self, pending: Pending) -> String {
@@ -283,7 +282,7 @@ impl Shell {
 
     pub async fn org_address(&self, org_id: i64) -> Result<Option<(String, String)>, Failure> {
         let org = self.db.call(move |conn| store::org(conn, org_id)).await?;
-        Ok(org.map(|org| (org.slug, self.url(&org.host, ""))))
+        Ok(org.map(|org| { let home = self.url(&format!("/{}", org.slug)); (org.slug, home) }))
     }
 
     pub async fn bootstrap(&self) -> Result<(), Failure> {
@@ -301,7 +300,7 @@ impl Shell {
             })
             .await?;
         if needed {
-            println!("no suite admin yet, create one at: {}", self.hub_url(&format!("/invite/{token}")));
+            println!("no suite admin yet, create one at: {}", self.url(&format!("/invite/{token}")));
         }
         Ok(())
     }
@@ -366,7 +365,7 @@ pub fn set_password(data: &Path, email: &str, password: &str) -> Result<(), Stri
     }
     let email = email.trim().to_lowercase();
     let hash = web::hash_password(password).map_err(|failure| failure.1)?;
-    let conn = Connection::open(data.join("chimera.db")).map_err(|e| e.to_string())?;
+    let conn = Connection::open(data.join("chi.db")).map_err(|e| e.to_string())?;
     conn.busy_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
     let changed = conn
         .execute("UPDATE users SET password_hash = ?1 WHERE email = ?2", (&hash, &email))
@@ -385,13 +384,13 @@ mod tests {
 
     #[test]
     fn set_password_replaces_the_hash_and_ends_sessions() {
-        let data = std::env::temp_dir().join(format!("chimera-passwd-{}", secret()));
+        let data = std::env::temp_dir().join(format!("chi-passwd-{}", secret()));
         std::fs::create_dir_all(&data).unwrap();
-        let conn = Connection::open(data.join("chimera.db")).unwrap();
+        let conn = Connection::open(data.join("chi.db")).unwrap();
         conn.execute_batch(include_str!("schema.sql")).unwrap();
         conn.execute("INSERT INTO users (id, email, password_hash, created_at) VALUES (1, 'a@b.c', 'old', 0)", []).unwrap();
         conn.execute(
-            "INSERT INTO sessions (token_hash, user_id, host, expires_at) VALUES ('t', 1, 'h', 9999999999)",
+            "INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ('t', 1, 9999999999)",
             [],
         )
         .unwrap();

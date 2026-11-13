@@ -36,7 +36,7 @@ struct Incoming {
 }
 
 #[derive(Clone)]
-pub struct Faults {
+pub struct Bugs {
     db: Db,
     shell: Shell,
     keys: Arc<RwLock<HashMap<String, i64>>>,
@@ -45,9 +45,9 @@ pub struct Faults {
     per_project: Arc<Limiter>,
 }
 
-impl Faults {
+impl Bugs {
     pub fn open(data: &FsPath, shell: Shell) -> Result<Self, String> {
-        let path = data.join("faults.db");
+        let path = data.join("bugs.db");
         let db = Db::open(&path, include_str!("schema.sql")).map_err(|e| e.to_string())?;
         let mut writer = Connection::open(&path).map_err(|e| e.to_string())?;
         writer.pragma_update(None, "foreign_keys", "ON").map_err(|e| e.to_string())?;
@@ -64,13 +64,13 @@ impl Faults {
                 let now = shell::now();
                 match writer::write(&mut writer, &batch, now) {
                     Ok(found) => found.into_iter().for_each(|alert| drop(alerts.try_send(alert))),
-                    Err(error) => eprintln!("faults: write failed: {error}"),
+                    Err(error) => eprintln!("bugs: write failed: {error}"),
                 }
                 batch.clear();
                 if now - pruned_at > 3600 {
                     pruned_at = now;
                     if let Err(error) = writer::prune(&writer, now) {
-                        eprintln!("faults: prune failed: {error}");
+                        eprintln!("bugs: prune failed: {error}");
                     }
                 }
             }
@@ -92,7 +92,7 @@ impl Faults {
                         "title": alert.title,
                         "culprit": alert.culprit,
                         "level": alert.level,
-                        "url": format!("{home}/faults/issues/{}", alert.issue_id),
+                        "url": format!("{home}/bugs/{}", alert.issue_id),
                     }))
                     .await;
             }
@@ -117,7 +117,7 @@ impl Faults {
     }
 
     pub fn ui(&self) -> Router {
-        Router::new().nest("/faults", ui::routes()).with_state(self.clone())
+        Router::new().nest("/bugs", ui::routes()).with_state(self.clone())
     }
 }
 
@@ -158,21 +158,21 @@ fn inflate(headers: &HeaderMap, body: &[u8]) -> Option<Vec<u8>> {
 }
 
 async fn ingest(
-    State(faults): State<Faults>,
+    State(bugs): State<Bugs>,
     Path(project_id): Path<i64>,
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
     uri: axum::http::Uri,
     body: Body,
 ) -> Result<Response, Failure> {
-    if !faults.per_ip.allow(&client_ip(&headers)) {
+    if !bugs.per_ip.allow(&client_ip(&headers)) {
         return Ok(backoff());
     }
-    let known = sentry_key(&headers, &query).is_some_and(|key| faults.keys.read().expect("no holder of the key cache panics").get(key) == Some(&project_id));
+    let known = sentry_key(&headers, &query).is_some_and(|key| bugs.keys.read().expect("no holder of the key cache panics").get(key) == Some(&project_id));
     if !known {
         return Err(Failure::new(StatusCode::UNAUTHORIZED, "unknown project or key"));
     }
-    if !faults.per_project.allow(&project_id.to_string()) {
+    if !bugs.per_project.allow(&project_id.to_string()) {
         return Ok(backoff());
     }
     let body = axum::body::to_bytes(body, MAX_BODY)
@@ -188,7 +188,7 @@ async fn ingest(
         (envelope.header["event_id"].clone(), envelope.events)
     };
     for event in events {
-        if faults.queue.try_send(Incoming { project_id, event }).is_err() {
+        if bugs.queue.try_send(Incoming { project_id, event }).is_err() {
             return Ok(backoff());
         }
     }

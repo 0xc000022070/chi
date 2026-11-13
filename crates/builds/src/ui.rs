@@ -10,19 +10,19 @@ use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use shell::{Ctx, Failure, Role, ago, client_ip, glyph, org_page, repo_glyph, utc};
 
-use crate::{BUILD_COLUMNS, Build, Depot, artifacts, build_row};
+use crate::{BUILD_COLUMNS, Build, Builds, artifacts, build_row};
 
-const BASE: &str = "/depot";
+const BASE: &str = "builds";
 
-pub fn routes() -> Router<Depot> {
+pub fn routes() -> Router<Builds> {
     Router::new()
         .route("/", get(builds))
-        .route("/builds/{id}", get(build))
-        .route("/builds/{id}/deliver", post(redeliver))
-        .route("/builds/{id}/artifacts/{name}", get(download))
+        .route("/{id}", get(build))
+        .route("/{id}/deliver", post(redeliver))
+        .route("/{id}/artifacts/{name}", get(download))
 }
 
-impl Depot {
+impl Builds {
     pub async fn pulse(&self, org_id: i64) -> Result<String, Failure> {
         let latest = self
             .db
@@ -38,7 +38,7 @@ impl Depot {
         let Some(build) = latest else { return Ok(String::new()) };
         let repo = self.shell.repo(org_id, build.repo_id).await?;
         Ok(html! {
-            a href={ (BASE) "/builds/" (build.id) } {
+            a href={ (BASE) "/" (build.id) } {
                 "[#]" b { (repo.map_or_else(|| "?".to_owned(), |repo| repo.name)) " " (build.version) }
                 (build.status) " · " (ago(build.started_at))
             }
@@ -62,39 +62,39 @@ fn megabytes(size: i64) -> String {
 }
 
 async fn builds(
-    State(depot): State<Depot>,
+    State(builds): State<Builds>,
     Extension(ctx): Extension<Ctx>,
     Query(Search { q }): Query<Search>,
 ) -> Result<Html<String>, Failure> {
     let (org_id, wanted) = (ctx.org_id, q.clone());
-    let rows = depot
+    let rows = builds
         .db
         .call(move |conn| {
             conn.prepare(&format!(
                 "SELECT {BUILD_COLUMNS} FROM builds
-                 WHERE org_id = ?1 AND (?2 = '' OR instr(version, ?2) OR instr(commit_sha, ?2) OR instr(?2, commit_sha) AND commit_sha != '' OR branch = ?2 OR channel = ?2)
+                 WHERE org_id = ?1 AND (?2 = '' OR instr(version, ?2) OR instr(commit_sha, ?2) OR instr(?2, commit_sha) AND commit_sha != '' OR branch = ?2 OR tag = ?2)
                  ORDER BY id DESC LIMIT 200"
             ))?
             .query_map((org_id, wanted), build_row)?
             .collect::<rusqlite::Result<Vec<Build>>>()
         })
         .await?;
-    let repos = depot.shell.repos(org_id).await?;
+    let repos = builds.shell.repos(org_id).await?;
     let repo = |id: i64| repos.iter().find(|repo| repo.id == id).map_or(("--", "?"), |repo| (repo_glyph(&repo.kind), repo.name.as_str()));
 
     Ok(org_page(
         &ctx,
-        "depot",
+        "builds",
         html! {
-            form method="get" { input type="search" name="q" value=(q) aria-label="Search builds" placeholder="version, commit, branch or channel"; }
+            form method="get" { input type="search" name="q" value=(q) aria-label="Search builds" placeholder="version, commit, branch or tag"; }
             @if rows.is_empty() { p.dim { "No builds." } }
             @for row in &rows {
                 @let (kind, name) = repo(row.repo_id);
-                a.row href={ (BASE) "/builds/" (row.id) } {
+                a.row href={ (BASE) "/" (row.id) } {
                     strong { (glyph(kind)) (name) " " (row.version) }
                     span {
                         span class={ "badge " (row.status) } { (row.status) }
-                        " " (row.channel) " · " (row.branch) " " (short(&row.commit))
+                        " " span.badge { (row.tag) } " " (row.branch) " " (short(&row.commit))
                         " · " (utc(row.started_at)) " · " (row.builder)
                     }
                 }
@@ -122,7 +122,7 @@ fn facts(build: &Build, repo: Option<&shell::Repo>) -> Markup {
     html! {
         dl {
             dt { "status" } dd { span class={ "badge " (build.status) } { (build.status) } }
-            dt { "channel" } dd { (build.channel) }
+            dt { "tag" } dd { span.badge { (build.tag) } }
             dt { "branch" } dd { (build.branch) }
             dt { "commit" } dd {
                 @match repo.filter(|repo| !repo.url.is_empty() && !build.commit.is_empty()) {
@@ -163,13 +163,13 @@ fn downloaded(downloads: &[Download]) -> Markup {
 }
 
 async fn build(
-    State(depot): State<Depot>,
+    State(builds): State<Builds>,
     Extension(ctx): Extension<Ctx>,
     Path(id): Path<i64>,
 ) -> Result<Html<String>, Failure> {
-    let build = depot.build(id).await?.filter(|build| build.org_id == ctx.org_id).ok_or_else(Failure::not_found)?;
-    let (files, (deliveries, downloads)) = depot.db.call(move |conn| Ok((artifacts(conn, id)?, activity(conn, id)?))).await?;
-    let repo = depot.shell.repo(build.org_id, build.repo_id).await?;
+    let build = builds.build(id).await?.filter(|build| build.org_id == ctx.org_id).ok_or_else(Failure::not_found)?;
+    let (files, (deliveries, downloads)) = builds.db.call(move |conn| Ok((artifacts(conn, id)?, activity(conn, id)?))).await?;
+    let repo = builds.shell.repo(build.org_id, build.repo_id).await?;
     let title = format!("{} {}", repo.as_ref().map_or("?", |repo| repo.name.as_str()), build.version);
 
     Ok(org_page(
@@ -181,14 +181,14 @@ async fn build(
             h2 { "Files" }
             @if files.is_empty() { p.dim { "No files stored for this build." } }
             @for file in &files {
-                a.row href={ (BASE) "/builds/" (id) "/artifacts/" (file.name) } {
+                a.row href={ (BASE) "/" (id) "/artifacts/" (file.name) } {
                     strong { (file.name) }
                     span { (megabytes(file.size)) " · sha256 " (file.sha256) }
                 }
             }
             (published(&deliveries))
             @if ctx.role >= Role::Maintainer && build.status != "uploading" {
-                form method="post" action={ (BASE) "/builds/" (id) "/deliver" } { button { "publish again" } }
+                form method="post" action={ (BASE) "/" (id) "/deliver" } { button { "publish again" } }
             }
             (downloaded(&downloads))
         },
@@ -196,25 +196,25 @@ async fn build(
 }
 
 async fn redeliver(
-    State(depot): State<Depot>,
+    State(builds): State<Builds>,
     Extension(ctx): Extension<Ctx>,
     Path(id): Path<i64>,
 ) -> Result<Redirect, Failure> {
     ctx.require(Role::Maintainer)?;
-    let build = depot.build(id).await?.filter(|build| build.org_id == ctx.org_id).ok_or_else(Failure::not_found)?;
+    let build = builds.build(id).await?.filter(|build| build.org_id == ctx.org_id).ok_or_else(Failure::not_found)?;
     if build.status == "uploading" {
         return Err(Failure::bad_request("build is still uploading"));
     }
-    depot.deliver(id).await?;
-    Ok(Redirect::to(&format!("{BASE}/builds/{id}")))
+    builds.deliver(id).await?;
+    Ok(Redirect::to(&ctx.href(&format!("/{BASE}/{id}"))))
 }
 
 async fn download(
-    State(depot): State<Depot>,
+    State(builds): State<Builds>,
     Extension(ctx): Extension<Ctx>,
     Path((id, name)): Path<(i64, String)>,
     headers: HeaderMap,
 ) -> Result<Response, Failure> {
-    depot.build(id).await?.filter(|build| build.org_id == ctx.org_id).ok_or_else(Failure::not_found)?;
-    depot.serve(id, &name, ctx.email, client_ip(&headers)).await
+    builds.build(id).await?.filter(|build| build.org_id == ctx.org_id).ok_or_else(Failure::not_found)?;
+    builds.serve(id, &name, ctx.email, client_ip(&headers)).await
 }

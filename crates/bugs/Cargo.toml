@@ -1,11 +1,11 @@
 [package]
-name = "depot"
+name = "bugs"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 axum.workspace = true
-http-body-util.workspace = true
+flate2.workspace = true
 maud.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
@@ -13,5 +13,3 @@ serde_json.workspace = true
 sha2.workspace = true
 shell.workspace = true
 tokio.workspace = true
-tokio-util.workspace = true
-ureq.workspace = true

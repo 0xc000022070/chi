@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS builds (
   version TEXT NOT NULL,
   commit_sha TEXT NOT NULL,
   branch TEXT NOT NULL,
-  channel TEXT NOT NULL,
+  tag TEXT NOT NULL,
   builder TEXT NOT NULL,
   status TEXT NOT NULL,
   started_at INTEGER NOT NULL,

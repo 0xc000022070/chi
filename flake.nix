@@ -1,5 +1,5 @@
 {
-  description = "chimera: self-hosted error tracking (faults) and build delivery (depot)";
+  description = "chi: self-hosted error tracking (bugs) and build tracking (builds)";
 
   inputs.nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
 

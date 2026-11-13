@@ -115,6 +115,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "bugs"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "flate2",
+ "maud",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shell",
+ "tokio",
+]
+
+[[package]]
+name = "builds"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "maud",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shell",
+ "tokio",
+ "tokio-util",
+ "ureq",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -143,12 +175,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
-name = "chimera"
+name = "chi"
 version = "0.1.0"
 dependencies = [
  "axum",
- "depot",
- "faults",
+ "bugs",
+ "builds",
  "shell",
  "tokio",
 ]
@@ -179,23 +211,6 @@ checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
  "typenum",
-]
-
-[[package]]
-name = "depot"
-version = "0.1.0"
-dependencies = [
- "axum",
- "http-body-util",
- "maud",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "shell",
- "tokio",
- "tokio-util",
- "ureq",
 ]
 
 [[package]]
@@ -241,21 +256,6 @@ name = "fallible-streaming-iterator"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
-
-[[package]]
-name = "faults"
-version = "0.1.0"
-dependencies = [
- "axum",
- "flate2",
- "maud",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "shell",
- "tokio",
-]
 
 [[package]]
 name = "find-msvc-tools"

@@ -4,7 +4,7 @@
   sqlite,
 }:
 rustPlatform.buildRustPackage {
-  pname = "chimera";
+  pname = "chi";
   version = "0.1.0";
   src = lib.fileset.toSource {
     root = ./.;
@@ -12,5 +12,5 @@ rustPlatform.buildRustPackage {
   };
   cargoLock.lockFile = ./Cargo.lock;
   buildInputs = [sqlite];
-  meta.mainProgram = "chimera";
+  meta.mainProgram = "chi";
 }

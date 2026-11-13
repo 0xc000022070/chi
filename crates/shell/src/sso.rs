@@ -57,7 +57,7 @@ pub fn register(endpoints: &Endpoints, redirect_uri: &str) -> Result<String, Str
         ureq::post(&endpoints.registration)
             .timeout(TIMEOUT)
             .send_json(json!({
-                "client_name": "Chimera",
+                "client_name": "Chi",
                 "redirect_uris": [redirect_uri],
                 "grant_types": ["authorization_code"],
                 "response_types": ["code"],
