@@ -95,13 +95,18 @@ h2+.dim{margin-top:-4px}
 #status::after{content:'● live';margin-left:auto;color:var(--good)}
 #status.off::after{content:'○ offline';color:var(--bad)}
 .app nav>a{display:none}
+#get-app{display:none;gap:12px;align-items:center;padding:8px 8px 8px 16px;border-bottom:1px solid var(--line);background:var(--surface);font-size:14px}
+.android #get-app{display:flex}
+#get-app span{flex:1}
+#get-app a{font-weight:500;color:var(--link)}
+#get-app button{height:36px;padding:0 12px;border:0;color:var(--muted)}
 @media(max-width:600px){nav{flex-wrap:wrap;height:auto;padding:6px 16px;overflow:visible}nav::after{content:'';order:1;flex-basis:100%}nav>a{order:2;padding:0 12px 0 0}nav>a:hover{background:none}dd:last-child{margin-bottom:0}main{padding-top:24px}h1{font-size:24px}form.stack{max-width:none}form.stack button{width:100%}dl{grid-template-columns:1fr;gap:0}dd{margin-bottom:12px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 ";
 
 const ICON: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2318191b'/%3E%3Crect x='9' y='9' width='14' height='14' rx='3' fill='%23ff4a1f'/%3E%3C/svg%3E";
 
-const IN_APP: &str = "if(navigator.userAgent.includes('chi-app'))document.documentElement.className='app'";
+const IN_APP: &str = "const u=navigator.userAgent;document.documentElement.className=u.includes('chi-app')?'app':/Android/.test(u)&&!localStorage.noapp?'android':''";
 
 const LIVE: &str = "const s=document.getElementById('status');async function tick(){if(document.hidden)return;try{const r=await fetch('status');if(!r.ok)throw 0;s.innerHTML=await r.text();s.className=''}catch{s.className='off'}}tick();setInterval(tick,10000);document.addEventListener('visibilitychange',tick)";
 
@@ -130,7 +135,16 @@ fn frame(title: &str, base: &str, nav: Markup, body: Markup, tail: Markup) -> Ht
                     title { (title) " · chi" }
                     style { (PreEscaped(CSS)) }
                 }
-                body { nav { (nav) } main { (body) } (tail) }
+                body {
+                    nav { (nav) }
+                    aside #get-app {
+                        span { "chi has an Android app" }
+                        a href="/app.apk" download { "install" }
+                        button aria-label="dismiss" onclick="localStorage.noapp=1;document.documentElement.className=''" { "✕" }
+                    }
+                    main { (body) }
+                    (tail)
+                }
             }
         }
         .into_string(),

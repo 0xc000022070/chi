@@ -142,6 +142,7 @@ impl Builds {
             .route("/api/builds/{id}/artifacts/{name}", put(upload).get(api_download))
             .route("/api/builds/{id}/finish", post(finish))
             .route("/api/builds/latest", get(latest))
+            .route("/app.apk", get(app))
             .with_state(self.clone())
     }
 
@@ -492,6 +493,27 @@ async fn latest(
         .await?;
     let build_id = build_id.ok_or_else(Failure::not_found)?;
     builds.serve(build_id, &query.name, format!("token:{}", repo.name), client_ip(&headers)).await
+}
+
+async fn app(State(builds): State<Builds>, headers: HeaderMap) -> Result<Response, Failure> {
+    if !builds.per_ip.allow(&client_ip(&headers)) {
+        return Err(Failure::new(StatusCode::TOO_MANY_REQUESTS, "slow down"));
+    }
+    let build_id: Option<i64> = builds
+        .db
+        .call(|conn| {
+            conn.query_row(
+                "SELECT b.id FROM builds b JOIN artifacts a ON a.build_id = b.id
+                 WHERE b.tag = 'release' AND b.status = 'finished' AND a.name = 'chi.apk'
+                 ORDER BY b.id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+        })
+        .await?;
+    let build_id = build_id.ok_or_else(Failure::not_found)?;
+    builds.serve(build_id, "chi.apk", "app".to_owned(), client_ip(&headers)).await
 }
 
 #[cfg(test)]
