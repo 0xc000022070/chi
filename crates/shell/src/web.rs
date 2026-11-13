@@ -90,6 +90,8 @@ impl Shell {
             .route("/invite/{token}", get(invite_page).post(accept_invite))
             .route("/sso/{provider_id}", get(sso_start))
             .route("/callback", get(sso_callback))
+            .route("/sans.woff2", get(|| async { font(include_bytes!("../fonts/sans.woff2")) }))
+            .route("/mono.woff2", get(|| async { font(include_bytes!("../fonts/mono.woff2")) }))
             .with_state(self.clone())
             .fallback_service(middleware::from_fn_with_state(self.clone(), guard).layer(org_side))
             .layer(middleware::from_fn_with_state(self.clone(), visit));
@@ -105,6 +107,11 @@ impl Shell {
         let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ttl}{secure}");
         Ok(([(header::SET_COOKIE, cookie)], Redirect::to(to)).into_response())
     }
+}
+
+fn font(bytes: &'static [u8]) -> Response {
+    let headers = [(header::CONTENT_TYPE, "font/woff2"), (header::CACHE_CONTROL, "public, max-age=604800")];
+    (headers, bytes).into_response()
 }
 
 const NO_PROXY_REWRITES: HeaderValue = HeaderValue::from_static("private, no-transform");

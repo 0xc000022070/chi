@@ -6,8 +6,10 @@ use crate::Ctx;
 const CSS: &str = "
 :root{color-scheme:dark;--bg:#18191b;--surface:#222427;--ink:#eff0f1;--muted:#a3a7ad;--line:#3a3d42;--accent:#ff4a1f;--link:#ff7a57;--bad:#ff8f8f;--bad-bg:#4a2323;--warn:#f0c674;--warn-bg:#43371b;--good:#8fd6a4;--good-bg:#1f3a29}
 @media(prefers-color-scheme:light){:root{color-scheme:light;--bg:#f3f3f1;--surface:#e8e8e5;--ink:#18191b;--muted:#5c6066;--line:#cfcfca;--link:#b8300c;--bad:#a61b1b;--bad-bg:#f6d9d6;--warn:#7a5600;--warn-bg:#f3e6c0;--good:#17633a;--good-bg:#d5ecdc}}
+@font-face{font-family:sans;src:url(/sans.woff2) format('woff2');font-weight:400 600;font-display:swap}
+@font-face{font-family:mono;src:url(/mono.woff2) format('woff2');font-weight:400 600;font-display:swap}
 *{box-sizing:border-box}
-body{margin:0;font:16px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--ink);-webkit-text-size-adjust:100%}
+body{margin:0;font:16px/1.5 sans,system-ui,sans-serif;background:var(--bg);color:var(--ink);-webkit-text-size-adjust:100%}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 a{color:inherit}
 nav{display:flex;gap:4px;align-items:center;height:56px;padding:0 16px;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:1;background:var(--bg);overflow-x:auto;white-space:nowrap}
@@ -43,7 +45,7 @@ main .tabs a{display:flex;align-items:center;height:44px;padding:0 12px;border-b
 main .tabs a:hover{color:var(--ink)}
 main .tabs a[aria-current]{color:var(--ink);font-weight:500;border-color:var(--accent)}
 .tabs .end{margin-left:auto}
-pre,code{font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+pre,code{font:13px/1.6 mono,ui-monospace,monospace}
 pre{overflow-x:auto;padding:12px;border-radius:6px;background:var(--surface);margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}
 .frame{padding:12px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .lib{opacity:.55}
@@ -73,7 +75,7 @@ form.stack .primary{width:100%}
 .or::before,.or::after{content:'';flex:1;border-top:1px solid var(--line)}
 .inline button{padding:0 16px}
 nav button{height:36px;padding:0 12px;font-size:14px;color:var(--muted)}
-.glyph,.row .glyph{margin-right:8px;font:600 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent);white-space:pre}
+.glyph,.row .glyph{margin-right:8px;font:600 13px/1 mono,ui-monospace,monospace;color:var(--accent);white-space:pre}
 summary{display:flex;gap:12px;align-items:center;min-height:44px;cursor:pointer;list-style:none}
 summary::-webkit-details-marker{display:none}
 summary>div{flex:1;min-width:0}
@@ -82,11 +84,11 @@ details form{margin-top:16px}
 details.add{margin-top:8px}
 details.add summary{color:var(--muted);font-weight:500}
 details.add summary:hover{color:var(--ink)}
-details.add summary::before{content:'+';font:600 13px/1 ui-monospace,monospace;color:var(--accent)}
+details.add summary::before{content:'+';font:600 13px/1 mono,ui-monospace,monospace;color:var(--accent)}
 details.add[open] summary::before{content:'-'}
 .actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 h2+.dim{margin-top:-4px}
-#status{position:fixed;bottom:0;left:0;right:0;display:flex;gap:24px;align-items:center;height:36px;padding:0 16px;border-top:1px solid var(--line);background:var(--surface);font:13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);white-space:nowrap;overflow:hidden;-webkit-touch-callout:none;user-select:none}
+#status{position:fixed;bottom:0;left:0;right:0;display:flex;gap:24px;align-items:center;height:36px;padding:0 16px;border-top:1px solid var(--line);background:var(--surface);font:13px/1 mono,ui-monospace,monospace;color:var(--muted);white-space:nowrap;overflow:hidden;-webkit-touch-callout:none;user-select:none}
 .lane{flex:1;min-width:0;height:100%;overflow:hidden}
 .track{display:flex;width:max-content;height:100%}
 .track>span{display:flex;gap:24px;height:100%;padding-right:48px}
@@ -95,7 +97,7 @@ h2+.dim{margin-top:-4px}
 .run .track{animation:ticker linear infinite}
 .run:hover .track,.hold .track{animation-play-state:paused}
 @keyframes ticker{to{transform:translateX(-50%)}}
-#tip{position:fixed;left:12px;right:12px;bottom:44px;z-index:2;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--surface);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);overflow-wrap:anywhere;box-shadow:0 4px 16px rgb(0 0 0/.25)}
+#tip{position:fixed;left:12px;right:12px;bottom:44px;z-index:2;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--surface);font:13px/1.5 mono,ui-monospace,monospace;color:var(--muted);overflow-wrap:anywhere;box-shadow:0 4px 16px rgb(0 0 0/.25)}
 #tip b:not(:first-child){margin-left:1ch}
 #tip b{margin-right:1ch;color:var(--ink);font-weight:500}
 #tip div{margin-top:6px;color:var(--ink)}
@@ -154,6 +156,8 @@ fn frame(title: &str, base: &str, nav: Markup, body: Markup, tail: Markup) -> Ht
                     meta name="referrer" content="same-origin";
                     base href=(base);
                     link rel="icon" href=(ICON);
+                    link rel="preload" href="/sans.woff2" as="font" type="font/woff2" crossorigin;
+                    link rel="preload" href="/mono.woff2" as="font" type="font/woff2" crossorigin;
                     script { (PreEscaped(IN_APP)) }
                     title { (title) " · chi" }
                     style { (PreEscaped(CSS)) }
