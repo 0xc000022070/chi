@@ -497,27 +497,33 @@ async fn latest(
     builds.serve(build_id, &query.name, format!("token:{}", repo.name), client_ip(&headers)).await
 }
 
-async fn app(State(builds): State<Builds>, headers: HeaderMap) -> Result<Response, Failure> {
+#[derive(Deserialize)]
+struct AppQuery {
+    v: Option<String>,
+}
+
+async fn app(State(builds): State<Builds>, Query(query): Query<AppQuery>, headers: HeaderMap) -> Result<Response, Failure> {
     if !builds.per_ip.allow(&client_ip(&headers)) {
         return Err(Failure::new(StatusCode::TOO_MANY_REQUESTS, "slow down"));
     }
-    let (build_id, _) = release_apk(&builds).await?;
+    let (build_id, _) = release_apk(&builds, query.v).await?;
     builds.serve(build_id, "chi.apk", "app".to_owned(), client_ip(&headers)).await
 }
 
 async fn app_version(State(builds): State<Builds>) -> Result<String, Failure> {
-    Ok(release_apk(&builds).await?.1)
+    Ok(release_apk(&builds, None).await?.1)
 }
 
-async fn release_apk(builds: &Builds) -> Result<(i64, String), Failure> {
+async fn release_apk(builds: &Builds, version: Option<String>) -> Result<(i64, String), Failure> {
     let build: Option<(i64, String)> = builds
         .db
-        .call(|conn| {
+        .call(move |conn| {
             conn.query_row(
                 "SELECT b.id, b.version FROM builds b JOIN artifacts a ON a.build_id = b.id
                  WHERE b.tag = 'release' AND b.status = 'finished' AND a.name = 'chi.apk'
+                   AND (?1 IS NULL OR b.version = ?1)
                  ORDER BY b.id DESC LIMIT 1",
-                [],
+                [version],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
