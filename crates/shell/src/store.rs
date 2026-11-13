@@ -16,6 +16,7 @@ pub struct Repo {
     pub org_id: i64,
     pub name: String,
     pub url: String,
+    pub kind: String,
 }
 
 pub struct Provider {
@@ -144,17 +145,17 @@ pub fn providers(conn: &Connection) -> Result<Vec<Provider>> {
 }
 
 fn repo_row(row: &rusqlite::Row) -> Result<Repo> {
-    Ok(Repo { id: row.get(0)?, org_id: row.get(1)?, name: row.get(2)?, url: row.get(3)? })
+    Ok(Repo { id: row.get(0)?, org_id: row.get(1)?, name: row.get(2)?, url: row.get(3)?, kind: row.get(4)? })
 }
 
 pub fn repos(conn: &Connection, org_id: i64) -> Result<Vec<Repo>> {
-    conn.prepare("SELECT id, org_id, name, url FROM repos WHERE org_id = ?1 ORDER BY name")?
+    conn.prepare("SELECT id, org_id, name, url, kind FROM repos WHERE org_id = ?1 ORDER BY name")?
         .query_map([org_id], repo_row)?
         .collect()
 }
 
 pub fn repo_by_token(conn: &Connection, token_hash: &str) -> Result<Option<Repo>> {
-    conn.query_row("SELECT id, org_id, name, url FROM repos WHERE token_hash = ?1", [token_hash], repo_row)
+    conn.query_row("SELECT id, org_id, name, url, kind FROM repos WHERE token_hash = ?1", [token_hash], repo_row)
         .optional()
 }
 
@@ -344,13 +345,26 @@ pub fn set_role(conn: &Connection, org_id: i64, user_id: i64, role: Option<Role>
     Ok(())
 }
 
-pub fn save_repo(conn: &Connection, org_id: i64, name: &str, url: &str, token_hash: &str) -> Result<()> {
-    conn.execute(
-        "INSERT INTO repos (org_id, name, url, token_hash) VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT (org_id, name) DO UPDATE SET url = excluded.url, token_hash = excluded.token_hash",
-        (org_id, name, url, token_hash),
+pub fn create_repo(conn: &Connection, org_id: i64, name: &str, url: &str, kind: &str, token_hash: &str) -> Result<bool> {
+    let created = conn.execute(
+        "INSERT INTO repos (org_id, name, url, kind, token_hash) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
+        (org_id, name, url, kind, token_hash),
     )?;
+    Ok(created == 1)
+}
+
+pub fn update_repo(conn: &Connection, org_id: i64, id: i64, url: &str, kind: &str) -> Result<()> {
+    conn.execute("UPDATE repos SET url = ?3, kind = ?4 WHERE org_id = ?1 AND id = ?2", (org_id, id, url, kind))?;
     Ok(())
+}
+
+pub fn rotate_repo_token(conn: &Connection, org_id: i64, id: i64, token_hash: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "UPDATE repos SET token_hash = ?3 WHERE org_id = ?1 AND id = ?2 RETURNING name",
+        (org_id, id, token_hash),
+        |row| row.get(0),
+    )
+    .optional()
 }
 
 pub fn create_provider(conn: &Connection, org_id: i64, name: &str, issuer: &str, client_id: &str, trusted: bool) -> Result<()> {

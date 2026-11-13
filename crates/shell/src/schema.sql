@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS repos (
   org_id INTEGER NOT NULL REFERENCES orgs(id),
   name TEXT NOT NULL,
   url TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT '',
   token_hash TEXT NOT NULL UNIQUE,
   UNIQUE (org_id, name)
 );

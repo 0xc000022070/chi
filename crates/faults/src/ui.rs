@@ -11,7 +11,7 @@ use maud::{Markup, html};
 use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use serde_json::Value;
-use shell::{Ctx, Failure, Role, now, org_page, secret, utc};
+use shell::{Ctx, Failure, Role, ago, now, org_page, secret, utc};
 
 use crate::{Faults, envelope};
 
@@ -26,6 +26,39 @@ pub fn routes() -> Router<Faults> {
         .route("/projects", get(projects).post(create_project))
         .route("/projects/{id}/keys", post(create_key))
         .route("/keys/{key}/revoke", post(revoke_key))
+}
+
+impl Faults {
+    pub async fn pulse(&self, org_id: i64) -> Result<String, Failure> {
+        let (open, latest) = self
+            .db
+            .call(move |conn| {
+                let open: i64 = conn.query_row(
+                    "SELECT count(*) FROM issues i JOIN projects p ON p.id = i.project_id WHERE p.org_id = ?1 AND i.status = 'open'",
+                    [org_id],
+                    |row| row.get(0),
+                )?;
+                let latest = conn
+                    .query_row(
+                        "SELECT i.id, i.title, p.name, i.last_seen FROM issues i JOIN projects p ON p.id = i.project_id
+                         WHERE p.org_id = ?1 AND i.status = 'open' ORDER BY i.last_seen DESC LIMIT 1",
+                        [org_id],
+                        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?)),
+                    )
+                    .optional()?;
+                Ok((open, latest))
+            })
+            .await?;
+        Ok(html! {
+            a href=(BASE) class=(if open > 0 { "hot" } else { "calm" }) { "[!] " (open) " open" }
+            @if let Some((id, title, project, seen)) = latest {
+                a href={ (BASE) "/issues/" (id) } {
+                    b { (project) } (title.chars().take(60).collect::<String>()) " · " (ago(seen))
+                }
+            }
+        }
+        .into_string())
+    }
 }
 
 #[derive(Deserialize)]

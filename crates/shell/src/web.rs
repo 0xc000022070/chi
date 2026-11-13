@@ -16,7 +16,7 @@ use serde::Deserialize;
 use crate::{
     Ctx, Failure, Pending, Role, Shell, client_ip, now, secret, sha256_hex, sso,
     store::{self, Joined, Joiner, Org, SessionUser},
-    ui::{hub_page, org_page},
+    ui::{REPO_KINDS, glyph, hub_page, org_page, repo_glyph},
     url_encode,
 };
 
@@ -77,7 +77,9 @@ impl Shell {
             .route("/settings", get(settings))
             .route("/settings/members", post(save_member))
             .route("/settings/invites", post(create_invite))
-            .route("/settings/repos", post(save_repo))
+            .route("/settings/repos", post(create_repo))
+            .route("/settings/repos/{id}", post(update_repo))
+            .route("/settings/repos/{id}/token", post(rotate_repo_token))
             .route("/settings/providers", post(create_provider))
             .route("/settings/providers/{id}/delete", post(delete_provider))
             .with_state(self.clone())
@@ -539,6 +541,116 @@ fn role_options(current: &str) -> Markup {
     }
 }
 
+fn kind_options(current: &str) -> Markup {
+    html! {
+        option value="" { "other" }
+        @for (kind, _) in REPO_KINDS {
+            option value=(kind) selected[kind == current] { (kind) }
+        }
+    }
+}
+
+fn repos_section(repos: &[store::Repo], maintainer: bool) -> Markup {
+    html! {
+        h2 { "Repos" }
+        p.dim { "Codebases that upload builds. Each one has its own upload token." }
+        @if repos.is_empty() { p.dim { "None yet." } }
+        @for repo in repos {
+            @let about = if repo.url.is_empty() { repo.kind.as_str() } else { repo.url.as_str() };
+            @if maintainer {
+                details.row {
+                    summary {
+                        (glyph(repo_glyph(&repo.kind)))
+                        div { strong { (repo.name) } span { (about) } }
+                        span.dim { "edit" }
+                    }
+                    form.stack method="post" action=(format!("/settings/repos/{}", repo.id)) {
+                        label { "Type" select name="kind" { (kind_options(&repo.kind)) } }
+                        label { "URL" input name="url" value=(repo.url) placeholder="https://github.com/org/repo"; }
+                        div.actions {
+                            button { "save" }
+                            button formaction=(format!("/settings/repos/{}/token", repo.id)) { "new upload token" }
+                        }
+                        p.dim { "A new upload token replaces the current one." }
+                    }
+                }
+            } @else {
+                div.row { strong { (glyph(repo_glyph(&repo.kind))) (repo.name) } span { (about) } }
+            }
+        }
+        @if maintainer {
+            details.add {
+                summary { "Add a repo" }
+                form.stack method="post" action="/settings/repos" {
+                    label { "Name" input name="name" required; }
+                    label { "Type" select name="kind" { (kind_options("")) } }
+                    label { "URL" input name="url" placeholder="https://github.com/org/repo"; }
+                    button { "add repo" }
+                }
+            }
+        }
+    }
+}
+
+fn members_section(members: &[store::Member], owner: bool) -> Markup {
+    html! {
+        h2 { "Members" }
+        p.dim { "Suite admins reach every org without being listed here." }
+        @for member in members {
+            div.row {
+                strong { (member.email) }
+                @if owner {
+                    form.inline method="post" action="/settings/members" {
+                        input type="hidden" name="user_id" value=(member.user_id);
+                        select name="role" aria-label="Role" { (role_options(&member.role)) option value="" { "remove" } }
+                        " " button { "save" }
+                    }
+                } @else { span { (member.role) } }
+            }
+        }
+        @if owner {
+            details.add {
+                summary { "Invite someone" }
+                form.stack method="post" action="/settings/invites" {
+                    label { "Role" select name="role" { (role_options("viewer")) } }
+                    button { "create invite link" }
+                }
+            }
+        }
+    }
+}
+
+fn providers_section(providers: &[store::Provider]) -> Markup {
+    html! {
+        h2 { "Sign-in providers" }
+        p.dim { "Other services whose accounts can sign in to this org." }
+        @for provider in providers {
+            div.row {
+                strong { (provider.name) }
+                span { (provider.issuer) } " "
+                form.inline method="post" action=(format!("/settings/providers/{}/delete", provider.id)) {
+                    button { "remove" }
+                }
+            }
+        }
+        details.add {
+            summary { "Add a provider" }
+            form.stack method="post" action="/settings/providers" {
+                label { "Name shown on the sign-in page" input name="name" required; }
+                label { "Issuer URL" input name="issuer" placeholder="https://…" required; }
+                label {
+                    "Roles"
+                    select name="trusted" {
+                        option value="0" { "its users are always viewers" }
+                        option value="1" { "its users keep the role they are given here" }
+                    }
+                }
+                button { "add provider" }
+            }
+        }
+    }
+}
+
 async fn settings(State(shell): State<Shell>, Extension(ctx): Extension<Ctx>) -> Result<Response, Failure> {
     let org_id = ctx.org_id;
     let (members, repos, providers) = shell
@@ -549,66 +661,15 @@ async fn settings(State(shell): State<Shell>, Extension(ctx): Extension<Ctx>) ->
         })
         .await?;
     let owner = ctx.role >= Role::Owner;
-    let maintainer = ctx.role >= Role::Maintainer;
     Ok(org_page(
         &ctx,
         "settings",
         html! {
             h1 { "Settings" }
             p.dim { (ctx.email) " · " (ctx.role.as_str()) }
-            h2 { "Repos" }
-            @for repo in &repos {
-                div.row { strong { (repo.name) } span { (repo.url) } }
-            }
-            @if maintainer {
-                form.stack method="post" action="/settings/repos" {
-                    label { "Repo name" input name="name" placeholder="sevastopol" required; }
-                    label { "Repo URL" input name="url" placeholder="https://github.com/org/repo"; }
-                    button { "save repo and issue a new upload token" }
-                }
-            }
-            h2 { "Members" }
-            @for member in &members {
-                div.row {
-                    strong { (member.email) }
-                    @if owner {
-                        form.inline method="post" action="/settings/members" {
-                            input type="hidden" name="user_id" value=(member.user_id);
-                            select name="role" aria-label="Role" { (role_options(&member.role)) option value="" { "remove" } }
-                            " " button { "save" }
-                        }
-                    } @else { span { (member.role) } }
-                }
-            }
-            @if owner {
-                h2 { "Invite" }
-                form.stack method="post" action="/settings/invites" {
-                    label { "Role" select name="role" { (role_options("viewer")) } }
-                    button { "create invite link" }
-                }
-                h2 { "Sign-in providers" }
-                @for provider in &providers {
-                    div.row {
-                        strong { (provider.name) }
-                        span { (provider.issuer) } " "
-                        form.inline method="post" action=(format!("/settings/providers/{}/delete", provider.id)) {
-                            button { "remove" }
-                        }
-                    }
-                }
-                form.stack method="post" action="/settings/providers" {
-                    label { "Name shown on the sign-in page" input name="name" required; }
-                    label { "Issuer URL" input name="issuer" placeholder="https://…" required; }
-                    label {
-                        "Roles"
-                        select name="trusted" {
-                            option value="0" { "its users are always viewers" }
-                            option value="1" { "its users keep the role they are given here" }
-                        }
-                    }
-                    button { "add provider" }
-                }
-            }
+            (repos_section(&repos, ctx.role >= Role::Maintainer))
+            (members_section(&members, owner))
+            @if owner { (providers_section(&providers)) }
         },
     )
     .into_response())
@@ -674,25 +735,72 @@ async fn create_invite(
 
 #[derive(Deserialize)]
 struct RepoForm {
+    #[serde(default)]
     name: String,
     #[serde(default)]
     url: String,
+    #[serde(default)]
+    kind: String,
 }
 
-async fn save_repo(
+impl RepoForm {
+    fn checked(self) -> Result<(String, String, String), Failure> {
+        let url = self.url.trim().trim_end_matches('/').to_owned();
+        if !(url.is_empty() || url.starts_with("https://")) {
+            return Err(Failure::bad_request("the url must be https"));
+        }
+        if !(self.kind.is_empty() || REPO_KINDS.iter().any(|(kind, _)| *kind == self.kind)) {
+            return Err(Failure::bad_request("unknown repo type"));
+        }
+        Ok((self.name.trim().to_owned(), url, self.kind))
+    }
+}
+
+async fn create_repo(
     State(shell): State<Shell>,
     Extension(ctx): Extension<Ctx>,
     Form(form): Form<RepoForm>,
 ) -> Result<Response, Failure> {
     ctx.require(Role::Maintainer)?;
-    let (name, url) = (form.name.trim().to_owned(), form.url.trim().trim_end_matches('/').to_owned());
-    if name.is_empty() || !(url.is_empty() || url.starts_with("https://")) {
-        return Err(Failure::bad_request("a name is required and the url must be https"));
+    let (name, url, kind) = form.checked()?;
+    if name.is_empty() {
+        return Err(Failure::bad_request("a name is required"));
     }
     let token = secret();
     let (hash, org_id, label) = (sha256_hex(token.as_bytes()), ctx.org_id, format!("Upload token for {name}."));
-    shell.db.call(move |conn| store::save_repo(conn, org_id, &name, &url, &hash)).await?;
+    if !shell.db.call(move |conn| store::create_repo(conn, org_id, &name, &url, &kind, &hash)).await? {
+        return Err(Failure::bad_request("a repo with that name already exists"));
+    }
     Ok(once(&ctx, "Upload token", &label, &token))
+}
+
+async fn update_repo(
+    State(shell): State<Shell>,
+    Extension(ctx): Extension<Ctx>,
+    Path(id): Path<i64>,
+    Form(form): Form<RepoForm>,
+) -> Result<Response, Failure> {
+    ctx.require(Role::Maintainer)?;
+    let (_, url, kind) = form.checked()?;
+    let org_id = ctx.org_id;
+    shell.db.call(move |conn| store::update_repo(conn, org_id, id, &url, &kind)).await?;
+    Ok(Redirect::to("/settings").into_response())
+}
+
+async fn rotate_repo_token(
+    State(shell): State<Shell>,
+    Extension(ctx): Extension<Ctx>,
+    Path(id): Path<i64>,
+) -> Result<Response, Failure> {
+    ctx.require(Role::Maintainer)?;
+    let token = secret();
+    let (hash, org_id) = (sha256_hex(token.as_bytes()), ctx.org_id);
+    let name = shell
+        .db
+        .call(move |conn| store::rotate_repo_token(conn, org_id, id, &hash))
+        .await?
+        .ok_or_else(Failure::not_found)?;
+    Ok(once(&ctx, "Upload token", &format!("New upload token for {name}. The old one stopped working."), &token))
 }
 
 #[derive(Deserialize)]

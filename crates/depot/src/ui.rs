@@ -6,8 +6,9 @@ use axum::{
     routing::{get, post},
 };
 use maud::{Markup, html};
+use rusqlite::OptionalExtension;
 use serde::Deserialize;
-use shell::{Ctx, Failure, Role, client_ip, org_page, utc};
+use shell::{Ctx, Failure, Role, ago, client_ip, glyph, org_page, repo_glyph, utc};
 
 use crate::{BUILD_COLUMNS, Build, Depot, artifacts, build_row};
 
@@ -19,6 +20,31 @@ pub fn routes() -> Router<Depot> {
         .route("/builds/{id}", get(build))
         .route("/builds/{id}/deliver", post(redeliver))
         .route("/builds/{id}/artifacts/{name}", get(download))
+}
+
+impl Depot {
+    pub async fn pulse(&self, org_id: i64) -> Result<String, Failure> {
+        let latest = self
+            .db
+            .call(move |conn| {
+                conn.query_row(
+                    &format!("SELECT {BUILD_COLUMNS} FROM builds WHERE org_id = ?1 ORDER BY id DESC LIMIT 1"),
+                    [org_id],
+                    build_row,
+                )
+                .optional()
+            })
+            .await?;
+        let Some(build) = latest else { return Ok(String::new()) };
+        let repo = self.shell.repo(org_id, build.repo_id).await?;
+        Ok(html! {
+            a href={ (BASE) "/builds/" (build.id) } {
+                "[#]" b { (repo.map_or_else(|| "?".to_owned(), |repo| repo.name)) " " (build.version) }
+                (build.status) " · " (ago(build.started_at))
+            }
+        }
+        .into_string())
+    }
 }
 
 #[derive(Deserialize)]
@@ -54,7 +80,7 @@ async fn builds(
         })
         .await?;
     let repos = depot.shell.repos(org_id).await?;
-    let repo_name = |id: i64| repos.iter().find(|repo| repo.id == id).map_or("?", |repo| repo.name.as_str());
+    let repo = |id: i64| repos.iter().find(|repo| repo.id == id).map_or(("--", "?"), |repo| (repo_glyph(&repo.kind), repo.name.as_str()));
 
     Ok(org_page(
         &ctx,
@@ -63,8 +89,9 @@ async fn builds(
             form method="get" { input type="search" name="q" value=(q) aria-label="Search builds" placeholder="version, commit, branch or channel"; }
             @if rows.is_empty() { p.dim { "No builds." } }
             @for row in &rows {
+                @let (kind, name) = repo(row.repo_id);
                 a.row href={ (BASE) "/builds/" (row.id) } {
-                    strong { (repo_name(row.repo_id)) " " (row.version) }
+                    strong { (glyph(kind)) (name) " " (row.version) }
                     span {
                         span class={ "badge " (row.status) } { (row.status) }
                         " " (row.channel) " · " (row.branch) " " (short(&row.commit))

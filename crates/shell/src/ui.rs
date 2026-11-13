@@ -73,11 +73,44 @@ form.stack .primary{width:100%}
 .or::before,.or::after{content:'';flex:1;border-top:1px solid var(--line)}
 .inline button{padding:0 16px}
 nav button{height:36px;padding:0 12px;font-size:14px;color:var(--muted)}
+.glyph,.row .glyph{margin-right:8px;font:600 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent);white-space:pre}
+summary{display:flex;gap:12px;align-items:center;min-height:44px;cursor:pointer;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary>div{flex:1;min-width:0}
+summary .glyph{width:2ch;margin:0}
+details form{margin-top:16px}
+details.add{margin-top:8px}
+details.add summary{color:var(--muted);font-weight:500}
+details.add summary:hover{color:var(--ink)}
+details.add summary::before{content:'+';font:600 13px/1 ui-monospace,monospace;color:var(--accent)}
+details.add[open] summary::before{content:'-'}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+h2+.dim{margin-top:-4px}
+#status{position:fixed;bottom:0;left:0;right:0;display:flex;gap:24px;align-items:center;height:36px;padding:0 16px;border-top:1px solid var(--line);background:var(--surface);font:13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);white-space:nowrap;overflow-x:auto}
+#status a{display:flex;gap:8px;align-items:center;height:100%;color:inherit;text-decoration:none}
+#status a:hover{color:var(--ink)}
+#status b{font-weight:500;color:var(--ink)}
+#status .hot{color:var(--bad)}
+#status .calm{color:var(--good)}
+#status::after{content:'● live';margin-left:auto;color:var(--good)}
+#status.off::after{content:'○ offline';color:var(--bad)}
 @media(max-width:600px){nav{flex-wrap:wrap;height:auto;padding:6px 16px;overflow:visible}nav::after{content:'';order:1;flex-basis:100%}nav>a{order:2;padding:0 12px 0 0}nav>a:hover{background:none}dd:last-child{margin-bottom:0}main{padding-top:24px}h1{font-size:24px}form.stack{max-width:none}form.stack button{width:100%}dl{grid-template-columns:1fr;gap:0}dd{margin-bottom:12px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 ";
 
-fn frame(title: &str, nav: Markup, body: Markup) -> Html<String> {
+const LIVE: &str = "const s=document.getElementById('status');async function tick(){if(document.hidden)return;try{const r=await fetch('/status');if(!r.ok)throw 0;s.innerHTML=await r.text();s.className=''}catch{s.className='off'}}tick();setInterval(tick,10000);document.addEventListener('visibilitychange',tick)";
+
+pub const REPO_KINDS: [(&str, &str); 5] = [("backend", ">_"), ("mobile", "[]"), ("web", "<>"), ("library", "{}"), ("cli", "$_")];
+
+pub fn repo_glyph(kind: &str) -> &'static str {
+    REPO_KINDS.iter().find(|(name, _)| *name == kind).map_or("--", |(_, glyph)| glyph)
+}
+
+pub fn glyph(text: &str) -> Markup {
+    html! { span.glyph aria-hidden="true" { (text) } }
+}
+
+fn frame(title: &str, nav: Markup, body: Markup, tail: Markup) -> Html<String> {
     Html(
         html! {
             (DOCTYPE)
@@ -89,7 +122,7 @@ fn frame(title: &str, nav: Markup, body: Markup) -> Html<String> {
                     title { (title) " · chimera" }
                     style { (PreEscaped(CSS)) }
                 }
-                body { nav { (nav) } main { (body) } }
+                body { nav { (nav) } main { (body) } (tail) }
             }
         }
         .into_string(),
@@ -101,7 +134,7 @@ fn logout() -> Markup {
 }
 
 pub fn hub_page(title: &str, signed_in: bool, body: Markup) -> Html<String> {
-    frame(title, html! { b { a href="/" { "chimera" } } @if signed_in { (logout()) } }, body)
+    frame(title, html! { b { a href="/" { "chimera" } } @if signed_in { (logout()) } }, body, html! {})
 }
 
 pub fn org_page(ctx: &Ctx, title: &str, body: Markup) -> Html<String> {
@@ -109,11 +142,12 @@ pub fn org_page(ctx: &Ctx, title: &str, body: Markup) -> Html<String> {
         title,
         html! {
             b { a href="/" { (ctx.org_name) } }
-            a href="/faults" { "faults" }
-            a href="/depot" { "depot" }
-            a href="/settings" { "settings" }
+            a href="/faults" { (glyph("[!]")) "faults" }
+            a href="/depot" { (glyph("[#]")) "depot" }
+            a href="/settings" { (glyph("[~]")) "settings" }
             (logout())
         },
         body,
+        html! { footer #status aria-live="polite" {} script { (PreEscaped(LIVE)) } },
     )
 }

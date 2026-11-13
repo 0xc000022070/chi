@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 pub use store::Repo;
-pub use ui::org_page;
+pub use ui::{glyph, org_page, repo_glyph};
 
 #[derive(Debug)]
 pub struct Failure(pub StatusCode, pub String);
@@ -235,6 +235,7 @@ impl Shell {
             _ => return Err(format!("hub url must start with http:// or https://: {hub_url}")),
         };
         let db = Db::open(&data.join("chimera.db"), include_str!("schema.sql")).map_err(|e| e.to_string())?;
+        add_repo_kind(&db.0.lock().expect("nothing else holds the connection yet")).map_err(|e| e.to_string())?;
         Ok(Self {
             db,
             hub_host: host.into(),
@@ -325,6 +326,24 @@ impl Shell {
     }
 }
 
+fn add_repo_kind(conn: &Connection) -> rusqlite::Result<()> {
+    let present: bool =
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('repos') WHERE name = 'kind')", [], |row| row.get(0))?;
+    if !present {
+        conn.execute("ALTER TABLE repos ADD COLUMN kind TEXT NOT NULL DEFAULT ''", [])?;
+    }
+    Ok(())
+}
+
+pub fn ago(ts: i64) -> String {
+    match (now() - ts).max(0) {
+        secs @ 0..60 => format!("{secs}s ago"),
+        secs @ 60..3600 => format!("{}m ago", secs / 60),
+        secs @ 3600..86_400 => format!("{}h ago", secs / 3600),
+        secs => format!("{}d ago", secs / 86_400),
+    }
+}
+
 async fn run_hook(hook: &Path, payload: &str) -> std::io::Result<(bool, String)> {
     let mut child = tokio::process::Command::new(hook)
         .stdin(Stdio::piped())
@@ -386,6 +405,23 @@ mod tests {
         let sessions: i64 = conn.query_row("SELECT count(*) FROM sessions", [], |row| row.get(0)).unwrap();
         assert_eq!(sessions, 0);
         std::fs::remove_dir_all(&data).unwrap();
+    }
+
+    #[test]
+    fn repo_kind_is_added_to_an_old_database_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE repos (id INTEGER PRIMARY KEY, name TEXT NOT NULL); INSERT INTO repos VALUES (1, 'a');").unwrap();
+        add_repo_kind(&conn).unwrap();
+        add_repo_kind(&conn).unwrap();
+        let kind: String = conn.query_row("SELECT kind FROM repos", [], |row| row.get(0)).unwrap();
+        assert_eq!(kind, "");
+    }
+
+    #[test]
+    fn ago_picks_the_largest_unit() {
+        assert_eq!(ago(now() - 5), "5s ago");
+        assert_eq!(ago(now() - 150), "2m ago");
+        assert_eq!(ago(now() - 2 * 86_400), "2d ago");
     }
 
     #[test]

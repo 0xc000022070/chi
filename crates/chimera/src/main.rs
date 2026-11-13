@@ -1,3 +1,4 @@
+use axum::{Extension, Router, extract::State, response::Html, routing::get};
 use std::{os::unix::fs::PermissionsExt, path::PathBuf, process::ExitCode};
 
 const USAGE: &str = "usage: chimera serve | chimera push ... | chimera passwd <email>
@@ -24,6 +25,13 @@ fn hooks(dir: Option<String>) -> Result<Vec<PathBuf>, String> {
     Ok(hooks)
 }
 
+async fn status(
+    State((faults, depot)): State<(faults::Faults, depot::Depot)>,
+    Extension(ctx): Extension<shell::Ctx>,
+) -> Result<Html<String>, shell::Failure> {
+    Ok(Html(faults.pulse(ctx.org_id).await? + &depot.pulse(ctx.org_id).await?))
+}
+
 async fn serve() -> Result<(), String> {
     let url = std::env::var("CHIMERA_URL").map_err(|_| USAGE)?;
     let data = PathBuf::from(std::env::var("CHIMERA_DATA").unwrap_or_else(|_| "data".to_owned()));
@@ -35,7 +43,8 @@ async fn serve() -> Result<(), String> {
     let depot = depot::Depot::open(&data, shell.clone())?;
     shell.bootstrap().await.map_err(|failure| failure.1)?;
 
-    let app = shell.router(faults.ui().merge(depot.ui()), faults.ingest().merge(depot.api()));
+    let live = Router::new().route("/status", get(status)).with_state((faults.clone(), depot.clone()));
+    let app = shell.router(faults.ui().merge(depot.ui()).merge(live), faults.ingest().merge(depot.api()));
     let listener = tokio::net::TcpListener::bind(&listen).await.map_err(|e| format!("{listen}: {e}"))?;
     println!("chimera listening on {listen}");
     axum::serve(listener, app).await.map_err(|e| e.to_string())
