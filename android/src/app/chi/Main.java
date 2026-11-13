@@ -109,7 +109,7 @@ public final class Main extends Activity {
         setContentView(root);
 
         if (state == null || web.restoreState(state) == null) {
-            web.loadUrl(HOME);
+            web.loadUrl(getPreferences(MODE_PRIVATE).getString("last", HOME));
         }
     }
 
@@ -161,6 +161,9 @@ public final class Main extends Activity {
         List<String> path = uri.getPathSegments();
         boolean org = HOST.equals(uri.getHost()) && !path.isEmpty() && !RESERVED.contains(path.get(0));
         slug = org ? path.get(0) : null;
+        if (org) {
+            getPreferences(MODE_PRIVATE).edit().putString("last", url).apply();
+        }
         String section = org && path.size() > 1 ? path.get(1) : "";
         for (int i = 0; i < TABS.length; i++) {
             boolean active = TABS[i].equals(section);
