@@ -5,7 +5,7 @@ use argon2::{
 use axum::{
     Extension, Form, Router,
     extract::{Path, Query, Request, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -135,6 +135,8 @@ impl Shell {
     }
 }
 
+const NO_PROXY_REWRITES: HeaderValue = HeaderValue::from_static("private, no-transform");
+
 async fn visit(State(shell): State<Shell>, mut req: Request, next: Next) -> Response {
     let host = req
         .headers()
@@ -164,7 +166,9 @@ async fn visit(State(shell): State<Shell>, mut req: Request, next: Next) -> Resp
         return Failure::not_found().into_response();
     }
     req.extensions_mut().insert(Visit { host, org, user, token_hash });
-    next.run(req).await
+    let mut response = next.run(req).await;
+    response.headers_mut().entry(header::CACHE_CONTROL).or_insert(NO_PROXY_REWRITES);
+    response
 }
 
 async fn guard(State(shell): State<Shell>, mut req: Request, next: Next) -> Response {
