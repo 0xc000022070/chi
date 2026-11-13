@@ -124,13 +124,10 @@ public final class Main extends Activity {
         dock.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
         dock.addView(bar, new LinearLayout.LayoutParams(-1, -2));
 
-        ready = text("update ready · tap to restart", 13, Typeface.MONOSPACE, R.color.ink);
+        ready = text("update ready · tap to install", 13, Typeface.MONOSPACE, R.color.ink);
         ready.setBackgroundColor(getColor(R.color.surface));
         ready.setVisibility(View.GONE);
-        ready.setOnClickListener(v -> {
-            getSharedPreferences("update", MODE_PRIVATE).edit().putBoolean("restart", true).commit();
-            install();
-        });
+        ready.setOnClickListener(v -> install());
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -215,7 +212,7 @@ public final class Main extends Activity {
             params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
             id = installer.createSession(params);
             try (PackageInstaller.Session session = installer.openSession(id);
-                    InputStream in = URI.create(HOME + "/app.apk").toURL().openStream();
+                    InputStream in = URI.create(HOME + "/app.apk?v=" + latest).toURL().openStream();
                     OutputStream out = session.openWrite("chi.apk", 0, -1)) {
                 in.transferTo(out);
                 session.fsync(out);
@@ -313,17 +310,6 @@ public final class Main extends Activity {
         request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
         getSystemService(DownloadManager.class).enqueue(request);
         Toast.makeText(this, "downloading " + name, Toast.LENGTH_SHORT).show();
-    }
-
-    public static final class Restart extends BroadcastReceiver {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            android.content.SharedPreferences update = context.getSharedPreferences("update", MODE_PRIVATE);
-            if (update.getBoolean("restart", false)) {
-                update.edit().remove("restart").apply();
-                context.startActivity(new Intent(context, Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            }
-        }
     }
 
     private final class Pages extends WebViewClient {
