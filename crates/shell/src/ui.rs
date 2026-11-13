@@ -4,7 +4,7 @@ use maud::{DOCTYPE, Markup, PreEscaped, html};
 use crate::Ctx;
 
 const CSS: &str = "
-:root{color-scheme:dark;--bg:#18191b;--surface:#222427;--ink:#eff0f1;--muted:#a3a7ad;--line:#3a3d42;--accent:#ff4a1f;--on-accent:#18191b;--link:#ff7a57;--bad:#ff8f8f;--bad-bg:#4a2323;--warn:#f0c674;--warn-bg:#43371b;--good:#8fd6a4;--good-bg:#1f3a29}
+:root{color-scheme:dark;--bg:#18191b;--surface:#222427;--ink:#eff0f1;--muted:#a3a7ad;--line:#3a3d42;--accent:#ff4a1f;--link:#ff7a57;--bad:#ff8f8f;--bad-bg:#4a2323;--warn:#f0c674;--warn-bg:#43371b;--good:#8fd6a4;--good-bg:#1f3a29}
 @media(prefers-color-scheme:light){:root{color-scheme:light;--bg:#f3f3f1;--surface:#e8e8e5;--ink:#18191b;--muted:#5c6066;--line:#cfcfca;--link:#b8300c;--bad:#a61b1b;--bad-bg:#f6d9d6;--warn:#7a5600;--warn-bg:#f3e6c0;--good:#17633a;--good-bg:#d5ecdc}}
 *{box-sizing:border-box}
 body{margin:0;font:16px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--ink);-webkit-text-size-adjust:100%}
@@ -61,12 +61,16 @@ main>form:first-child{margin-top:0}
 form.stack{max-width:420px}
 .row .inline{display:inline-block;margin-top:8px}
 .inline input,.inline select{height:44px}
-button{height:44px;padding:0 24px;background:none;font-weight:500;cursor:pointer;transition:background .15s,border-color .15s,transform .1s}
-button:hover{background:var(--surface);border-color:var(--muted)}
-button:active{transform:translateY(1px)}
+button,main a.button{height:44px;padding:0 24px;background:none;font-weight:500;cursor:pointer;transition:background .15s,border-color .15s,transform .1s}
+button:hover,a.button:hover{background:var(--surface);border-color:var(--muted)}
+button:active,a.button:active{transform:translateY(1px)}
 button::first-letter{text-transform:uppercase}
-button.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
-button.primary:hover{background:#ff6a45;border-color:#ff6a45}
+button.primary{background:#d63c14;border-color:#d63c14;color:#fff}
+button.primary:hover{background:#bf3410;border-color:#bf3410}
+main a.button{display:flex;align-items:center;justify-content:center;max-width:420px;margin-bottom:12px;border:1px solid var(--line);border-radius:6px;color:var(--ink);text-decoration:none}
+form.stack .primary{width:100%}
+.or{display:flex;align-items:center;gap:12px;max-width:420px;margin:24px 0;font-size:13px;color:var(--muted)}
+.or::before,.or::after{content:'';flex:1;border-top:1px solid var(--line)}
 .inline button{padding:0 16px}
 nav button{height:36px;padding:0 12px;font-size:14px;color:var(--muted)}
 @media(max-width:600px){nav{flex-wrap:wrap;height:auto;padding:6px 16px;overflow:visible}nav::after{content:'';order:1;flex-basis:100%}nav>a{order:2;padding:0 12px 0 0}nav>a:hover{background:none}dd:last-child{margin-bottom:0}main{padding-top:24px}h1{font-size:24px}form.stack{max-width:none}form.stack button{width:100%}dl{grid-template-columns:1fr;gap:0}dd{margin-bottom:12px}}

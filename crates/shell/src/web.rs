@@ -292,8 +292,9 @@ async fn login_form(shell: &Shell, target: &Target, signed_in: bool, notice: &st
             h1 { "Sign in" }
             @if !notice.is_empty() { p.error { (notice) } }
             @for provider in &providers {
-                a.row href=(format!("/sso/{}?{query}", provider.id)) { strong { "Continue with " (provider.name) } }
+                a.button href=(format!("/sso/{}?{query}", provider.id)) { "Continue with " (provider.name) }
             }
+            @if !providers.is_empty() { p.or { "or" } }
             form.stack method="post" action="/login" {
                 input type="hidden" name="to" value=(target.to);
                 input type="hidden" name="next" value=(target.next);
