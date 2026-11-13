@@ -58,11 +58,16 @@ public final class Main extends Activity {
     private boolean typing;
     private volatile int update = -1;
     private Intent confirm;
+    private boolean started;
+    private TextView ready;
     private final BroadcastReceiver installed = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, 0) == PackageInstaller.STATUS_PENDING_USER_ACTION) {
                 confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class);
+                if (started) {
+                    showConfirm();
+                }
             }
         }
     };
@@ -114,10 +119,19 @@ public final class Main extends Activity {
         dock.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
         dock.addView(bar, new LinearLayout.LayoutParams(-1, -2));
 
+        ready = text("update ready · tap to restart", 13, Typeface.MONOSPACE, R.color.ink);
+        ready.setBackgroundColor(getColor(R.color.surface));
+        ready.setVisibility(View.GONE);
+        ready.setOnClickListener(v -> {
+            getSharedPreferences("update", MODE_PRIVATE).edit().putBoolean("restart", true).commit();
+            install();
+        });
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(getColor(R.color.bg));
         root.addView(stage, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.addView(ready, new LinearLayout.LayoutParams(-1, dp(40)));
         root.addView(dock, new LinearLayout.LayoutParams(-1, -2));
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             int edges = WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime();
@@ -139,15 +153,26 @@ public final class Main extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
+        started = true;
+        showConfirm();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        started = false;
+        install();
+    }
+
+    private void showConfirm() {
         if (confirm != null) {
             startActivity(confirm);
             confirm = null;
         }
     }
 
-    @Override
-    protected void onStop() {
-        super.onStop();
+    private void install() {
+        ready.setVisibility(View.GONE);
         if (update < 0) {
             return;
         }
@@ -191,6 +216,7 @@ public final class Main extends Activity {
                 session.fsync(out);
             }
             update = id;
+            runOnUiThread(() -> ready.setVisibility(View.VISIBLE));
         } catch (Exception offline) {
             if (id >= 0) {
                 installer.abandonSession(id);
@@ -282,6 +308,17 @@ public final class Main extends Activity {
         request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
         getSystemService(DownloadManager.class).enqueue(request);
         Toast.makeText(this, "downloading " + name, Toast.LENGTH_SHORT).show();
+    }
+
+    public static final class Restart extends BroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            android.content.SharedPreferences update = context.getSharedPreferences("update", MODE_PRIVATE);
+            if (update.getBoolean("restart", false)) {
+                update.edit().remove("restart").apply();
+                context.startActivity(new Intent(context, Main.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            }
+        }
     }
 
     private final class Pages extends WebViewClient {

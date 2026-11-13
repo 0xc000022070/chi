@@ -3,6 +3,7 @@
     <color name="ink">#18191b</color>
     <color name="muted">#5c6066</color>
     <color name="line">#cfcfca</color>
+    <color name="surface">#e8e8e5</color>
     <color name="accent">#ff4a1f</color>
     <color name="icon_bg">#18191b</color>
     <style name="App" parent="@android:style/Theme.DeviceDefault.DayNight">
