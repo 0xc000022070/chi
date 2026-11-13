@@ -79,9 +79,9 @@ async fn issues(
         html! {
             div.tabs {
                 @for tab in STATUSES {
-                    a href={ (BASE) "?status=" (tab) } { @if tab == status { b { (tab) } } @else { (tab) } }
+                    a href={ (BASE) "?status=" (tab) } aria-current=[(tab == status).then_some("page")] { (tab) }
                 }
-                a href={ (BASE) "/projects" } style="margin-left:auto" { "projects" }
+                a href={ (BASE) "/projects" } class="end" { "projects" }
             }
             @if rows.is_empty() { p.dim { "Nothing here." } }
             @for row in &rows {
@@ -360,7 +360,7 @@ async fn projects(State(faults): State<Faults>, Extension(ctx): Extension<Ctx>) 
                             }
                         }
                         form.inline method="post" action={ (BASE) "/projects/" (row.id) "/keys" } {
-                            input name="label" placeholder="new key label" required;
+                            input name="label" placeholder="new key label" aria-label="New key label" required;
                             " " button { "add key" }
                         }
                     }
@@ -369,12 +369,15 @@ async fn projects(State(faults): State<Faults>, Extension(ctx): Extension<Ctx>) 
             @if maintainer {
                 h2 { "New project" }
                 form.stack method="post" {
-                    input name="name" placeholder="name" required;
-                    select name="repo_id" {
-                        option value="" { "no repo" }
-                        @for repo in &repos { option value=(repo.id) { (repo.name) } }
+                    label { "Name" input name="name" required; }
+                    label {
+                        "Repo"
+                        select name="repo_id" {
+                            option value="" { "no repo" }
+                            @for repo in &repos { option value=(repo.id) { (repo.name) } }
+                        }
                     }
-                    input name="path_prefix" placeholder="frame path prefix to strip, e.g. /workspace/";
+                    label { "Frame path prefix to strip" input name="path_prefix" placeholder="/workspace/"; }
                     button { "create" }
                 }
             }

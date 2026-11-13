@@ -225,9 +225,9 @@ async fn home(State(shell): State<Shell>, Extension(visit): Extension<Visit>) ->
             @if admin {
                 h2 { "New org" }
                 form.stack method="post" action="/orgs" {
-                    input name="name" placeholder="name" required;
-                    input name="slug" placeholder="slug" required pattern="[a-z0-9-]+";
-                    input name="host" placeholder="host, e.g. acme-chimera.example.com" required;
+                    label { "Name" input name="name" required; }
+                    label { "Slug" input name="slug" required pattern="[a-z0-9-]+"; }
+                    label { "Host" input name="host" placeholder="acme-chimera.example.com" required; }
                     button { "create" }
                 }
             }
@@ -297,9 +297,9 @@ async fn login_form(shell: &Shell, target: &Target, signed_in: bool, notice: &st
             form.stack method="post" action="/login" {
                 input type="hidden" name="to" value=(target.to);
                 input type="hidden" name="next" value=(target.next);
-                input type="email" name="email" placeholder="email" autocomplete="username" required;
-                input type="password" name="password" placeholder="password" autocomplete="current-password" required;
-                button { "sign in" }
+                label { "Email" input type="email" name="email" autocomplete="username" required; }
+                label { "Password" input type="password" name="password" autocomplete="current-password" required; }
+                button.primary { "Sign in" }
             }
         },
     )
@@ -405,11 +405,13 @@ async fn invite_page(
                 @if let Some(user) = visit.native() {
                     p { "Accept as " b { (user.email) } "?" }
                 } @else {
-                    input type="email" name="email" placeholder="email" autocomplete="username" required;
-                    input type="password" name="password" placeholder=(format!("password, {MIN_PASSWORD}+ characters"))
-                        autocomplete="new-password" minlength=(MIN_PASSWORD) required;
+                    label { "Email" input type="email" name="email" autocomplete="username" required; }
+                    label {
+                        "Password, " (MIN_PASSWORD) "+ characters"
+                        input type="password" name="password" autocomplete="new-password" minlength=(MIN_PASSWORD) required;
+                    }
                 }
-                button { "accept" }
+                button.primary { "Accept invite" }
             }
         },
     )
@@ -559,8 +561,8 @@ async fn settings(State(shell): State<Shell>, Extension(ctx): Extension<Ctx>) ->
             }
             @if maintainer {
                 form.stack method="post" action="/settings/repos" {
-                    input name="name" placeholder="name, e.g. sevastopol" required;
-                    input name="url" placeholder="https://github.com/org/repo";
+                    label { "Repo name" input name="name" placeholder="sevastopol" required; }
+                    label { "Repo URL" input name="url" placeholder="https://github.com/org/repo"; }
                     button { "save repo and issue a new upload token" }
                 }
             }
@@ -571,7 +573,7 @@ async fn settings(State(shell): State<Shell>, Extension(ctx): Extension<Ctx>) ->
                     @if owner {
                         form.inline method="post" action="/settings/members" {
                             input type="hidden" name="user_id" value=(member.user_id);
-                            select name="role" { (role_options(&member.role)) option value="" { "remove" } }
+                            select name="role" aria-label="Role" { (role_options(&member.role)) option value="" { "remove" } }
                             " " button { "save" }
                         }
                     } @else { span { (member.role) } }
@@ -580,7 +582,7 @@ async fn settings(State(shell): State<Shell>, Extension(ctx): Extension<Ctx>) ->
             @if owner {
                 h2 { "Invite" }
                 form.stack method="post" action="/settings/invites" {
-                    select name="role" { (role_options("viewer")) }
+                    label { "Role" select name="role" { (role_options("viewer")) } }
                     button { "create invite link" }
                 }
                 h2 { "Sign-in providers" }
@@ -594,11 +596,14 @@ async fn settings(State(shell): State<Shell>, Extension(ctx): Extension<Ctx>) ->
                     }
                 }
                 form.stack method="post" action="/settings/providers" {
-                    input name="name" placeholder="name shown on the sign-in page" required;
-                    input name="issuer" placeholder="issuer url, https://…" required;
-                    select name="trusted" {
-                        option value="0" { "its users are always viewers" }
-                        option value="1" { "its users keep the role they are given here" }
+                    label { "Name shown on the sign-in page" input name="name" required; }
+                    label { "Issuer URL" input name="issuer" placeholder="https://…" required; }
+                    label {
+                        "Roles"
+                        select name="trusted" {
+                            option value="0" { "its users are always viewers" }
+                            option value="1" { "its users keep the role they are given here" }
+                        }
                     }
                     button { "add provider" }
                 }

@@ -60,7 +60,7 @@ async fn builds(
         &ctx,
         "depot",
         html! {
-            form method="get" { input type="search" name="q" value=(q) placeholder="version, commit, branch or channel"; }
+            form method="get" { input type="search" name="q" value=(q) aria-label="Search builds" placeholder="version, commit, branch or channel"; }
             @if rows.is_empty() { p.dim { "No builds." } }
             @for row in &rows {
                 a.row href={ (BASE) "/builds/" (row.id) } {

@@ -4,31 +4,73 @@ use maud::{DOCTYPE, Markup, PreEscaped, html};
 use crate::Ctx;
 
 const CSS: &str = "
-:root{color-scheme:light dark;--line:color-mix(in srgb,currentColor 18%,transparent);--dim:color-mix(in srgb,currentColor 60%,transparent)}
+:root{color-scheme:dark;--bg:#18191b;--surface:#222427;--ink:#eff0f1;--muted:#a3a7ad;--line:#3a3d42;--accent:#ff4a1f;--on-accent:#18191b;--link:#ff7a57;--bad:#ff8f8f;--bad-bg:#4a2323;--warn:#f0c674;--warn-bg:#43371b;--good:#8fd6a4;--good-bg:#1f3a29}
+@media(prefers-color-scheme:light){:root{color-scheme:light;--bg:#f3f3f1;--surface:#e8e8e5;--ink:#18191b;--muted:#5c6066;--line:#cfcfca;--link:#b8300c;--bad:#a61b1b;--bad-bg:#f6d9d6;--warn:#7a5600;--warn-bg:#f3e6c0;--good:#17633a;--good-bg:#d5ecdc}}
 *{box-sizing:border-box}
-body{margin:0;font:15px/1.45 system-ui,sans-serif}
-nav{display:flex;gap:14px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:Canvas;overflow-x:auto;white-space:nowrap}
-nav b{margin-right:auto}
-main{max-width:900px;margin:0 auto;padding:16px}
+body{margin:0;font:16px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--ink);-webkit-text-size-adjust:100%}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 a{color:inherit}
-h1{font-size:19px;margin:0 0 12px;overflow-wrap:anywhere}
-h2{font-size:15px;margin:24px 0 8px}
-.row{display:block;padding:12px 0;border-bottom:1px solid var(--line);text-decoration:none}
-.row strong{display:block;overflow-wrap:anywhere}
-.dim,.row span{color:var(--dim);font-size:13px}
-.badge{display:inline-block;padding:1px 7px;border-radius:9px;border:1px solid var(--line);font-size:12px}
-.error,.fatal,.failure,.failed{color:#d33}
-.tabs{display:flex;gap:12px;margin-bottom:8px}
-pre,code{font:12px/1.5 ui-monospace,monospace}
-pre{overflow-x:auto;padding:10px;border:1px solid var(--line);border-radius:8px;margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere}
-.frame{padding:8px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
-.lib{opacity:.5}
+nav{display:flex;gap:4px;align-items:center;height:56px;padding:0 16px;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:1;background:var(--bg);overflow-x:auto;white-space:nowrap}
+nav a{display:flex;align-items:center;height:44px;padding:0 12px;border-radius:6px;color:var(--muted);text-decoration:none;transition:color .15s,background .15s}
+nav a:hover{color:var(--ink);background:var(--surface)}
+nav b{margin-right:12px}
+nav form{margin-left:auto}
+nav b a{padding-left:0;color:var(--ink);font-weight:600;letter-spacing:-.01em}
+nav b a:hover{background:none}
+nav b a::before{content:'';width:10px;height:10px;margin-right:8px;border-radius:2px;background:var(--accent)}
+main{max-width:880px;margin:0 auto;padding:32px 16px 96px}
+h1{font-size:28px;line-height:1.2;font-weight:600;letter-spacing:-.02em;margin:0 0 16px;overflow-wrap:anywhere}
+h2{font-size:20px;line-height:1.3;font-weight:600;letter-spacing:-.01em;margin:48px 0 12px}
+p{margin:0 0 16px}
+main a:not(.row){color:var(--link);text-underline-offset:3px}
+.row{display:block;margin:0 -12px;padding:16px 12px;border-bottom:1px solid var(--line);text-decoration:none}
+a.row{transition:background .15s}
+a.row:hover{background:var(--surface);border-radius:6px;border-color:transparent}
+a.row:active{transform:translateY(1px)}
+.row strong{display:block;font-weight:600;overflow-wrap:anywhere}
+.dim,.row span,dt{color:var(--muted)}
+.row span,span.dim,dt{font-size:13px}
+.row>span{overflow-wrap:anywhere}
+.badge{display:inline-block;padding:0 8px;border-radius:4px;background:var(--surface);font-size:13px;font-weight:500;line-height:22px}
+.row .badge{color:var(--ink)}
+.error,.fatal,.failure,.failed,.row .error,.row .fatal,.row .failed{color:var(--bad)}
+.badge.error,.badge.fatal,.badge.failed{background:var(--bad-bg)}
+.badge.warning,.row .badge.warning,.badge.uploading,.row .badge.uploading{color:var(--warn);background:var(--warn-bg)}
+.badge.finished,.row .badge.finished{color:var(--good);background:var(--good-bg)}
+p.error{padding:12px 16px;border-radius:6px;background:var(--bad-bg)}
+.tabs{display:flex;gap:4px;margin:0 -12px 8px;border-bottom:1px solid var(--line);overflow-x:auto;white-space:nowrap}
+main .tabs a{display:flex;align-items:center;height:44px;padding:0 12px;border-bottom:2px solid transparent;color:var(--muted);text-decoration:none;transition:color .15s}
+main .tabs a:hover{color:var(--ink)}
+main .tabs a[aria-current]{color:var(--ink);font-weight:500;border-color:var(--accent)}
+.tabs .end{margin-left:auto}
+pre,code{font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{overflow-x:auto;padding:12px;border-radius:6px;background:var(--surface);margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.frame{padding:12px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.lib{opacity:.55}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:8px 24px;align-items:baseline;margin:0 0 16px;padding:16px;border:1px solid var(--line);border-radius:8px}
+dd{margin:0;overflow-wrap:anywhere}
 form.inline{display:inline}
-input,select,button{font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:Canvas;color:inherit}
-form.stack input,form.stack select{display:block;width:100%;margin:6px 0}
-nav button{padding:2px 8px}
-dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;margin:0}
-dt{color:var(--dim)}dd{margin:0;overflow-wrap:anywhere}
+label{display:block;margin-bottom:16px;font-size:13px;font-weight:500;color:var(--muted)}
+input,select,button{font:inherit;font-size:16px;color:var(--ink);border:1px solid var(--line);border-radius:6px}
+input,select{height:48px;max-width:100%;padding:0 12px;background:var(--bg);transition:border-color .15s}
+input:hover,select:hover{border-color:var(--muted)}
+input::placeholder{color:var(--muted)}
+label input,label select,input[type=search]{display:block;width:100%;margin-top:4px}
+main>form{margin:16px 0}
+main>form:first-child{margin-top:0}
+form.stack{max-width:420px}
+.row .inline{display:inline-block;margin-top:8px}
+.inline input,.inline select{height:44px}
+button{height:44px;padding:0 24px;background:none;font-weight:500;cursor:pointer;transition:background .15s,border-color .15s,transform .1s}
+button:hover{background:var(--surface);border-color:var(--muted)}
+button:active{transform:translateY(1px)}
+button::first-letter{text-transform:uppercase}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+button.primary:hover{background:#ff6a45;border-color:#ff6a45}
+.inline button{padding:0 16px}
+nav button{height:36px;padding:0 12px;font-size:14px;color:var(--muted)}
+@media(max-width:600px){nav{flex-wrap:wrap;height:auto;padding:6px 16px;overflow:visible}nav::after{content:'';order:1;flex-basis:100%}nav>a{order:2;padding:0 12px 0 0}nav>a:hover{background:none}dd:last-child{margin-bottom:0}main{padding-top:24px}h1{font-size:24px}form.stack{max-width:none}form.stack button{width:100%}dl{grid-template-columns:1fr;gap:0}dd{margin-bottom:12px}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
 ";
 
 fn frame(title: &str, nav: Markup, body: Markup) -> Html<String> {
