@@ -164,7 +164,6 @@ async fn issues(
     let status = query.status.unwrap_or_else(|| "open".to_owned());
     let (wanted, org_id) = (status.clone(), ctx.org_id);
     let rows = bugs.db.call(move |conn| list_issues(conn, org_id, &wanted, 200)).await?;
-    let maintainer = ctx.role >= Role::Maintainer;
 
     Ok(org_page(
         &ctx,
@@ -178,17 +177,14 @@ async fn issues(
             }
             @if rows.is_empty() { p.dim { "Nothing here." } }
             @for row in &rows {
-                div.item {
-                    a.row href={ (BASE) "/" (row.id) } {
-                        strong { span.dim { "#" (row.id) } " " (row.title) }
-                        span { (row.culprit) }
-                        br;
-                        span {
-                            span class={ "badge " (row.level) } { (row.level) }
-                            " " (row.project) " · " (row.count) " events · " (utc(row.last_seen))
-                        }
+                a.row href={ (BASE) "/" (row.id) } {
+                    strong { span.dim { "#" (row.id) } " " (row.title) }
+                    span { (row.culprit) }
+                    br;
+                    span {
+                        span class={ "badge " (row.level) } { (row.level) }
+                        " " (row.project) " · " (row.count) " events · " (utc(row.last_seen))
                     }
-                    @if maintainer { (status_buttons(row.id, &status, true)) }
                 }
             }
         },
@@ -292,16 +288,13 @@ fn facts(detail: &IssueDetail, event: &Value) -> Markup {
     }
 }
 
-fn status_buttons(id: i64, current: &str, from_list: bool) -> Markup {
+fn status_buttons(id: i64, current: &str) -> Markup {
     html! {
         div.quick {
             @for status in STATUSES {
                 @if status != current {
                     form.inline method="post" action={ (BASE) "/" (id) "/status" } {
-                        @if from_list { input type="hidden" name="from" value=(current); }
-                        button class=(status) name="status" value=(status) aria-label={ "Mark #" (id) " " (status) } {
-                            (match status { "open" => "reopen", "resolved" => "resolve", _ => "ignore" })
-                        }
+                        button class=(status) name="status" value=(status) { "Mark " (status) }
                     }
                 }
             }
@@ -373,8 +366,8 @@ async fn issue(
         &detail.title,
         html! {
             h1 { span.dim { "#" (id) } " " (detail.title) }
-            @if ctx.role >= Role::Maintainer { (status_buttons(id, &detail.status, false)) }
             (facts(&detail, &event))
+            @if ctx.role >= Role::Maintainer { (status_buttons(id, &detail.status)) }
             (stack(&detail, &event, &repo))
             (attachments(&detail, &event))
         },
@@ -384,7 +377,6 @@ async fn issue(
 #[derive(Deserialize)]
 struct StatusForm {
     status: String,
-    from: Option<String>,
 }
 
 async fn set_status(
@@ -397,10 +389,6 @@ async fn set_status(
     if !STATUSES.contains(&form.status.as_str()) {
         return Err(Failure::bad_request("unknown status"));
     }
-    let back = match form.from.as_deref().filter(|from| STATUSES.contains(from)) {
-        Some(from) => format!("/{BASE}?status={from}"),
-        None => format!("/{BASE}/{id}"),
-    };
     let org_id = ctx.org_id;
     bugs
         .db
@@ -411,7 +399,7 @@ async fn set_status(
             )
         })
         .await?;
-    Ok(Redirect::to(&ctx.href(&back)))
+    Ok(Redirect::to(&ctx.href(&format!("/{BASE}/{id}"))))
 }
 
 struct ProjectRow {

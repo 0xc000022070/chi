@@ -87,14 +87,10 @@ details.add summary:hover{color:var(--ink)}
 details.add summary::before{content:'+';font:600 13px/1 mono,ui-monospace,monospace;color:var(--accent)}
 details.add[open] summary::before{content:'-'}
 .actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
-.item{display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line)}
-.item .row{flex:1;min-width:0;margin-right:0;border:0}
-.quick{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
-.item .quick{flex-direction:column;margin:0}
-.quick button{padding:0 14px;font-size:14px}
-button.resolved{color:var(--good);border-color:var(--good)}
-button.ignored{color:var(--muted)}
-button.open{color:var(--warn);border-color:var(--warn)}
+.quick{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+button.resolved{color:var(--good);background:var(--good-bg);border-color:var(--good)}
+button.ignored{color:var(--warn);background:var(--warn-bg);border-color:var(--warn)}
+button.open{color:var(--bad);background:var(--bad-bg);border-color:var(--bad)}
 dialog{width:min(480px,calc(100% - 32px));padding:24px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
 dialog::backdrop{background:rgb(0 0 0/.5)}
 dialog h2{margin-top:0}
