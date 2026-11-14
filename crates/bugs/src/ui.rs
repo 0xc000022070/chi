@@ -19,6 +19,14 @@ const BASE: &str = "bugs";
 const STATUSES: [&str; 3] = ["open", "resolved", "ignored"];
 const IS_DEV: &str = "i.environment IN ('development', 'dev', 'local')";
 
+fn environment_badge(environment: &str) -> Option<&'static str> {
+    match environment {
+        "development" | "dev" | "local" => Some("dev"),
+        "staging" | "stg" => Some("stg"),
+        _ => None,
+    }
+}
+
 pub fn routes() -> Router<Bugs> {
     Router::new()
         .route("/", get(issues))
@@ -137,7 +145,6 @@ struct IssueRow {
     last_seen: i64,
     project: String,
     environment: String,
-    dev: bool,
 }
 
 fn list_issues(conn: &rusqlite::Connection, org_id: i64, status: &str, limit: i64) -> rusqlite::Result<Vec<IssueRow>> {
@@ -156,7 +163,6 @@ fn list_issues(conn: &rusqlite::Connection, org_id: i64, status: &str, limit: i6
             last_seen: row.get(5)?,
             project: row.get(6)?,
             environment: row.get(7)?,
-            dev: row.get(8)?,
         })
     })?
     .collect()
@@ -189,7 +195,7 @@ async fn issues(
                     br;
                     span {
                         span class={ "badge " (row.level) } { (row.level) }
-                        @if row.dev { " " span.badge { "dev" } }
+                        @if let Some(badge) = environment_badge(&row.environment) { " " span.badge { (badge) } }
                         " " (row.project) " · " (row.count) " events · " (utc(row.last_seen))
                     }
                 }
@@ -594,6 +600,15 @@ async fn revoke_key(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn badges_dev_and_staging_but_not_prod() {
+        assert_eq!(environment_badge("development"), Some("dev"));
+        assert_eq!(environment_badge("staging"), Some("stg"));
+        assert_eq!(environment_badge("stg"), Some("stg"));
+        assert_eq!(environment_badge("prod"), None);
+        assert_eq!(environment_badge(""), None);
+    }
 
     #[test]
     fn links_in_app_frames_to_the_repo_at_the_release() {
