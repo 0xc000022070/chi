@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS issues (
   first_seen INTEGER NOT NULL,
   last_seen INTEGER NOT NULL,
   count INTEGER NOT NULL DEFAULT 1,
+  environment TEXT NOT NULL DEFAULT '',
   UNIQUE (project_id, fingerprint)
 );
 CREATE INDEX IF NOT EXISTS issues_listing ON issues (project_id, status, last_seen);

@@ -25,6 +25,22 @@ pub struct Alert {
     pub level: String,
 }
 
+pub fn add_issue_environment(conn: &Connection) -> Result<()> {
+    let present: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('issues') WHERE name = 'environment')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !present {
+        conn.execute_batch(
+            "ALTER TABLE issues ADD COLUMN environment TEXT NOT NULL DEFAULT '';
+             UPDATE issues SET environment = coalesce(
+               (SELECT environment FROM events WHERE issue_id = issues.id ORDER BY id DESC LIMIT 1), '');",
+        )?;
+    }
+    Ok(())
+}
+
 pub fn keys(conn: &Connection) -> Result<HashMap<String, i64>> {
     conn.prepare("SELECT public_key, project_id FROM keys")?
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -84,21 +100,22 @@ fn count(
     project_id: i64,
     summary: &envelope::Summary,
     found: Option<(i64, String)>,
+    environment: &str,
     now: i64,
 ) -> Result<(i64, Option<&'static str>)> {
     let Some((id, status)) = found else {
         conn.execute(
-            "INSERT INTO issues (project_id, fingerprint, title, culprit, level, first_seen, last_seen)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-            (project_id, &summary.fingerprint, &summary.title, &summary.culprit, &summary.level, now),
+            "INSERT INTO issues (project_id, fingerprint, title, culprit, level, first_seen, last_seen, environment)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)",
+            (project_id, &summary.fingerprint, &summary.title, &summary.culprit, &summary.level, now, environment),
         )?;
         return Ok((conn.last_insert_rowid(), Some("issue.new")));
     };
     conn.execute(
-        "UPDATE issues SET title = ?2, culprit = ?3, level = ?4, last_seen = ?5, count = count + 1,
+        "UPDATE issues SET title = ?2, culprit = ?3, level = ?4, last_seen = ?5, count = count + 1, environment = ?6,
            status = CASE status WHEN 'resolved' THEN 'open' ELSE status END
          WHERE id = ?1",
-        (id, &summary.title, &summary.culprit, &summary.level, now),
+        (id, &summary.title, &summary.culprit, &summary.level, now, environment),
     )?;
     Ok((id, (status == "resolved").then_some("issue.regressed")))
 }
@@ -133,7 +150,8 @@ fn write_one(conn: &Connection, Incoming { project_id, event }: &Incoming, now: 
     let Some((org_id, project)) = project else { return Ok(None) };
 
     let (summary, found) = locate(conn, *project_id, envelope::summarize(event), now)?;
-    let (issue_id, kind) = count(conn, *project_id, &summary, found, now)?;
+    let environment = event["environment"].as_str().unwrap_or("");
+    let (issue_id, kind) = count(conn, *project_id, &summary, found, environment, now)?;
     store(conn, issue_id, event, now)?;
 
     Ok(kind.filter(|_| matches!(summary.level.as_str(), "error" | "fatal")).map(|kind| Alert {
@@ -199,6 +217,20 @@ mod tests {
         conn.execute("UPDATE issues SET status = 'ignored'", []).unwrap();
         assert!(write(&mut conn, &[event("A", "error")], 3000).unwrap().is_empty());
         assert_eq!(scalar(&conn, "SELECT COUNT(*) FROM issues WHERE status = 'ignored'"), 1);
+    }
+
+    #[test]
+    fn issues_take_the_latest_environment_and_old_rows_are_backfilled() {
+        let mut conn = seeded();
+        let mut dev = event("A", "error");
+        dev.event["environment"] = json!("development");
+        write(&mut conn, &[dev], 1000).unwrap();
+        assert_eq!(conn.query_row("SELECT environment FROM issues", [], |row| row.get::<_, String>(0)).unwrap(), "development");
+
+        conn.execute_batch("ALTER TABLE issues DROP COLUMN environment").unwrap();
+        add_issue_environment(&conn).unwrap();
+        add_issue_environment(&conn).unwrap();
+        assert_eq!(conn.query_row("SELECT environment FROM issues", [], |row| row.get::<_, String>(0)).unwrap(), "development");
     }
 
     #[test]

@@ -53,6 +53,7 @@ impl Bugs {
         writer.pragma_update(None, "foreign_keys", "ON").map_err(|e| e.to_string())?;
         writer.pragma_update(None, "cache_size", -256).map_err(|e| e.to_string())?;
         writer.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?;
+        writer::add_issue_environment(&writer).map_err(|e| e.to_string())?;
         let keys = writer::keys(&writer).map_err(|e| e.to_string())?;
 
         let (queue, mut incoming) = mpsc::channel::<Incoming>(QUEUE);

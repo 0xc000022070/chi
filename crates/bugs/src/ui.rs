@@ -17,6 +17,7 @@ use crate::{Bugs, envelope};
 
 const BASE: &str = "bugs";
 const STATUSES: [&str; 3] = ["open", "resolved", "ignored"];
+const IS_DEV: &str = "i.environment IN ('development', 'dev', 'local')";
 
 pub fn routes() -> Router<Bugs> {
     Router::new()
@@ -34,14 +35,14 @@ impl Bugs {
             .db
             .call(move |conn| {
                 let open: i64 = conn.query_row(
-                    "SELECT count(*) FROM issues i JOIN projects p ON p.id = i.project_id WHERE p.org_id = ?1 AND i.status = 'open'",
+                    &format!("SELECT count(*) FROM issues i JOIN projects p ON p.id = i.project_id WHERE p.org_id = ?1 AND i.status = 'open' AND NOT {IS_DEV}"),
                     [org_id],
                     |row| row.get(0),
                 )?;
                 let latest = conn
                     .query_row(
-                        "SELECT i.id, i.title, p.name, i.last_seen FROM issues i JOIN projects p ON p.id = i.project_id
-                         WHERE p.org_id = ?1 AND i.status = 'open' ORDER BY i.last_seen DESC LIMIT 1",
+                        &format!("SELECT i.id, i.title, p.name, i.last_seen FROM issues i JOIN projects p ON p.id = i.project_id
+                         WHERE p.org_id = ?1 AND i.status = 'open' AND NOT {IS_DEV} ORDER BY i.last_seen DESC LIMIT 1"),
                         [org_id],
                         |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?)),
                     )
@@ -83,6 +84,7 @@ impl Bugs {
                     "events": row.count,
                     "last_seen": utc(row.last_seen),
                     "project": row.project,
+                    "environment": row.environment,
                     "url": self.shell.url(&ctx.href(&format!("/{BASE}/{}", row.id))),
                 })
             })
@@ -134,14 +136,16 @@ struct IssueRow {
     count: i64,
     last_seen: i64,
     project: String,
+    environment: String,
+    dev: bool,
 }
 
 fn list_issues(conn: &rusqlite::Connection, org_id: i64, status: &str, limit: i64) -> rusqlite::Result<Vec<IssueRow>> {
-    conn.prepare(
-        "SELECT i.id, i.title, i.culprit, i.level, i.count, i.last_seen, p.name
+    conn.prepare(&format!(
+        "SELECT i.id, i.title, i.culprit, i.level, i.count, i.last_seen, p.name, i.environment, {IS_DEV} AS dev
          FROM issues i JOIN projects p ON p.id = i.project_id
-         WHERE p.org_id = ?1 AND i.status = ?2 ORDER BY i.last_seen DESC LIMIT ?3",
-    )?
+         WHERE p.org_id = ?1 AND i.status = ?2 ORDER BY dev, i.last_seen DESC LIMIT ?3"
+    ))?
     .query_map((org_id, status, limit), |row| {
         Ok(IssueRow {
             id: row.get(0)?,
@@ -151,6 +155,8 @@ fn list_issues(conn: &rusqlite::Connection, org_id: i64, status: &str, limit: i6
             count: row.get(4)?,
             last_seen: row.get(5)?,
             project: row.get(6)?,
+            environment: row.get(7)?,
+            dev: row.get(8)?,
         })
     })?
     .collect()
@@ -183,6 +189,7 @@ async fn issues(
                     br;
                     span {
                         span class={ "badge " (row.level) } { (row.level) }
+                        @if row.dev { " " span.badge { "dev" } }
                         " " (row.project) " · " (row.count) " events · " (utc(row.last_seen))
                     }
                 }
