@@ -137,7 +137,7 @@ async fn builds(
             @for row in &rows {
                 @let (kind, name) = repo(row.repo_id);
                 a.row href={ (BASE) "/" (row.id) } {
-                    strong { (glyph(kind)) (name) " " (row.version) }
+                    strong { (glyph(kind)) (name) " " (row.version) " " span.dim { "#" (row.id) } }
                     span {
                         span class={ "badge " (row.status) } { (row.status) }
                         " " span.badge { (row.tag) } " " (row.branch) " " (short(&row.commit))
@@ -222,7 +222,7 @@ async fn build(
         &ctx,
         &title,
         html! {
-            h1 { (title) }
+            h1 { (title) " " span.dim { "#" (id) } }
             (facts(&build, repo.as_ref()))
             h2 { "Files" }
             @if files.is_empty() { p.dim { "No files stored for this build." } }

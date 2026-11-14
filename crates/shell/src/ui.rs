@@ -87,6 +87,18 @@ details.add summary:hover{color:var(--ink)}
 details.add summary::before{content:'+';font:600 13px/1 mono,ui-monospace,monospace;color:var(--accent)}
 details.add[open] summary::before{content:'-'}
 .actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.item{display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line)}
+.item .row{flex:1;min-width:0;margin-right:0;border:0}
+.quick{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.item .quick{flex-direction:column;margin:0}
+.quick button{padding:0 14px;font-size:14px}
+button.resolved{color:var(--good);border-color:var(--good)}
+button.ignored{color:var(--muted)}
+button.open{color:var(--warn);border-color:var(--warn)}
+dialog{width:min(480px,calc(100% - 32px));padding:24px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+dialog::backdrop{background:rgb(0 0 0/.5)}
+dialog h2{margin-top:0}
+dialog .actions{margin:8px 0 0}
 h2+.dim{margin-top:-4px}
 #status{position:fixed;bottom:0;left:0;right:0;display:flex;gap:24px;align-items:center;height:36px;padding:0 16px;border-top:1px solid var(--line);background:var(--surface);font:13px/1 mono,ui-monospace,monospace;color:var(--muted);white-space:nowrap;overflow:hidden;-webkit-touch-callout:none;user-select:none}
 .lane{flex:1;min-width:0;height:100%;overflow:hidden}
@@ -133,6 +145,8 @@ s.addEventListener('touchmove',()=>held||up(),{passive:true});
 s.addEventListener('touchend',up);s.addEventListener('touchcancel',up);
 s.addEventListener('click',e=>{if(Date.now()-skip<800)e.preventDefault()},true);
 s.addEventListener('contextmenu',e=>e.preventDefault());
+let sx,sy;addEventListener('touchstart',e=>{const t=e.touches[0];sx=e.touches.length>1||e.target.closest('pre,input,select,.tabs,#status,dialog')?null:t.clientX;sy=t.clientY},{passive:true});
+addEventListener('touchend',e=>{if(sx==null)return;const t=e.changedTouches[0],dx=t.clientX-sx,dy=t.clientY-sy;sx=null;if(Math.abs(dx)<80||Math.abs(dx)<2*Math.abs(dy))return;const a=[...document.querySelectorAll('.tabs a')],i=a.findIndex(x=>x.hasAttribute('aria-current')),n=i<0?null:a[i+(dx<0?1:-1)];if(n)location=n.href});
 addEventListener('resize',fit);tick();setInterval(tick,10000);document.addEventListener('visibilitychange',tick)"#;
 
 pub const REPO_KINDS: [(&str, &str); 5] = [("backend", ">_"), ("mobile", "[]"), ("web", "<>"), ("library", "{}"), ("cli", "$_")];
