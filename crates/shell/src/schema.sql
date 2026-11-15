@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT,
   admin INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'human'
 );
 CREATE TABLE IF NOT EXISTS memberships (
   user_id INTEGER NOT NULL REFERENCES users(id),
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS repos (
   url TEXT NOT NULL DEFAULT '',
   kind TEXT NOT NULL DEFAULT '',
   token_hash TEXT NOT NULL UNIQUE,
+  pipeline TEXT NOT NULL DEFAULT '',
   UNIQUE (org_id, name)
 );
 CREATE TABLE IF NOT EXISTS clients (

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agents.workspace = true
 axum.workspace = true
 http-body-util.workspace = true
 maud.workspace = true

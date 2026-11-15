@@ -71,7 +71,17 @@ impl Bugs {
 }
 
 const EVENT_KEYS: [&str; 11] = [
-    "message", "logentry", "exception", "tags", "release", "environment", "platform", "transaction", "request", "contexts", "breadcrumbs",
+    "message",
+    "logentry",
+    "exception",
+    "tags",
+    "release",
+    "environment",
+    "platform",
+    "transaction",
+    "request",
+    "contexts",
+    "breadcrumbs",
 ];
 
 impl Bugs {
@@ -80,7 +90,10 @@ impl Bugs {
             return Err(Failure::bad_request("status is open, resolved or ignored"));
         }
         let (org_id, status) = (ctx.org_id, status.to_owned());
-        let rows = self.db.call(move |conn| list_issues(conn, org_id, &status, limit)).await?;
+        let rows = self
+            .db
+            .call(move |conn| list_issues(conn, org_id, &status, limit))
+            .await?;
         Ok(rows
             .iter()
             .map(|row| {
@@ -101,14 +114,21 @@ impl Bugs {
 
     pub async fn issue_json(&self, ctx: &Ctx, id: i64) -> Result<Value, Failure> {
         let org_id = ctx.org_id;
-        let detail = self.db.call(move |conn| load_issue(conn, id, org_id)).await?.ok_or_else(Failure::not_found)?;
+        let detail = self
+            .db
+            .call(move |conn| load_issue(conn, id, org_id))
+            .await?
+            .ok_or_else(Failure::not_found)?;
         let repo = match detail.repo_id {
             Some(repo_id) => self.shell.repo(org_id, repo_id).await?.map(|repo| repo.url),
             None => None,
         };
         let event = latest_event(&detail)?;
-        let latest: serde_json::Map<String, Value> =
-            EVENT_KEYS.iter().filter(|key| !event[**key].is_null()).map(|key| ((*key).to_owned(), event[*key].clone())).collect();
+        let latest: serde_json::Map<String, Value> = EVENT_KEYS
+            .iter()
+            .filter(|key| !event[**key].is_null())
+            .map(|key| ((*key).to_owned(), event[*key].clone()))
+            .collect();
         Ok(json!({
             "id": id,
             "title": detail.title,
@@ -147,7 +167,12 @@ struct IssueRow {
     environment: String,
 }
 
-fn list_issues(conn: &rusqlite::Connection, org_id: i64, status: &str, limit: i64) -> rusqlite::Result<Vec<IssueRow>> {
+fn list_issues(
+    conn: &rusqlite::Connection,
+    org_id: i64,
+    status: &str,
+    limit: i64,
+) -> rusqlite::Result<Vec<IssueRow>> {
     conn.prepare(&format!(
         "SELECT i.id, i.title, i.culprit, i.level, i.count, i.last_seen, p.name, i.environment, {IS_DEV} AS dev
          FROM issues i JOIN projects p ON p.id = i.project_id
@@ -175,7 +200,10 @@ async fn issues(
 ) -> Result<Html<String>, Failure> {
     let status = query.status.unwrap_or_else(|| "open".to_owned());
     let (wanted, org_id) = (status.clone(), ctx.org_id);
-    let rows = bugs.db.call(move |conn| list_issues(conn, org_id, &wanted, 200)).await?;
+    let rows = bugs
+        .db
+        .call(move |conn| list_issues(conn, org_id, &wanted, 200))
+        .await?;
 
     Ok(org_page(
         &ctx,
@@ -218,11 +246,19 @@ struct IssueDetail {
     recent: Vec<(Option<String>, i64, Option<String>)>,
 }
 
-fn source_url(repo: &str, path_prefix: &str, release: Option<&str>, frame: &Value) -> Option<String> {
+fn source_url(
+    repo: &str,
+    path_prefix: &str,
+    release: Option<&str>,
+    frame: &Value,
+) -> Option<String> {
     if repo.is_empty() || frame["in_app"] == false {
         return None;
     }
-    let path = frame["filename"].as_str()?.strip_prefix(path_prefix)?.trim_start_matches('/');
+    let path = frame["filename"]
+        .as_str()?
+        .strip_prefix(path_prefix)?
+        .trim_start_matches('/');
     Some(format!(
         "{}/blob/{}/{path}#L{}",
         repo.trim_end_matches('/'),
@@ -232,10 +268,20 @@ fn source_url(repo: &str, path_prefix: &str, release: Option<&str>, frame: &Valu
 }
 
 fn tags(event: &Value) -> Vec<(String, String)> {
-    let text = |value: &Value| value.as_str().map_or_else(|| value.to_string(), str::to_owned);
+    let text = |value: &Value| {
+        value
+            .as_str()
+            .map_or_else(|| value.to_string(), str::to_owned)
+    };
     match &event["tags"] {
-        Value::Object(map) => map.iter().map(|(key, value)| (key.clone(), text(value))).collect(),
-        Value::Array(pairs) => pairs.iter().map(|pair| (text(&pair[0]), text(&pair[1]))).collect(),
+        Value::Object(map) => map
+            .iter()
+            .map(|(key, value)| (key.clone(), text(value)))
+            .collect(),
+        Value::Array(pairs) => pairs
+            .iter()
+            .map(|pair| (text(&pair[0]), text(&pair[1])))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -256,7 +302,11 @@ fn issue_detail(row: &rusqlite::Row) -> rusqlite::Result<IssueDetail> {
     })
 }
 
-fn load_issue(conn: &rusqlite::Connection, id: i64, org_id: i64) -> rusqlite::Result<Option<IssueDetail>> {
+fn load_issue(
+    conn: &rusqlite::Connection,
+    id: i64,
+    org_id: i64,
+) -> rusqlite::Result<Option<IssueDetail>> {
     let detail = conn
         .query_row(
             "SELECT i.title, i.level, i.status, i.count, i.first_seen, i.last_seen,
@@ -267,7 +317,9 @@ fn load_issue(conn: &rusqlite::Connection, id: i64, org_id: i64) -> rusqlite::Re
             issue_detail,
         )
         .optional()?;
-    let Some(mut detail) = detail else { return Ok(None) };
+    let Some(mut detail) = detail else {
+        return Ok(None);
+    };
     detail.recent = conn
         .prepare("SELECT event_id, received_at, release FROM events WHERE issue_id = ?1 ORDER BY id DESC LIMIT 20")?
         .query_map([id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
@@ -366,9 +418,18 @@ async fn issue(
     Path(id): Path<i64>,
 ) -> Result<Html<String>, Failure> {
     let org_id = ctx.org_id;
-    let detail = bugs.db.call(move |conn| load_issue(conn, id, org_id)).await?.ok_or_else(Failure::not_found)?;
+    let detail = bugs
+        .db
+        .call(move |conn| load_issue(conn, id, org_id))
+        .await?
+        .ok_or_else(Failure::not_found)?;
     let repo = match detail.repo_id {
-        Some(repo_id) => bugs.shell.repo(org_id, repo_id).await?.map(|repo| repo.url).unwrap_or_default(),
+        Some(repo_id) => bugs
+            .shell
+            .repo(org_id, repo_id)
+            .await?
+            .map(|repo| repo.url)
+            .unwrap_or_default(),
         None => String::new(),
     };
 
@@ -380,7 +441,10 @@ async fn issue(
         html! {
             h1 { span.dim { "#" (id) } " " (detail.title) }
             (facts(&detail, &event))
-            @if ctx.role >= Role::Maintainer { (status_buttons(id, &detail.status)) }
+            @if ctx.role >= Role::Maintainer {
+                (status_buttons(id, &detail.status))
+                form.inline method="post" action={ "issues/from-error/" (id) } { button { "create issue" } }
+            }
             (stack(&detail, &event, &repo))
             (attachments(&detail, &event))
         },
@@ -422,7 +486,10 @@ struct ProjectRow {
     keys: Vec<(String, String)>,
 }
 
-async fn projects(State(bugs): State<Bugs>, Extension(ctx): Extension<Ctx>) -> Result<Html<String>, Failure> {
+async fn projects(
+    State(bugs): State<Bugs>,
+    Extension(ctx): Extension<Ctx>,
+) -> Result<Html<String>, Failure> {
     let org_id = ctx.org_id;
     let rows = bugs
         .db
@@ -524,7 +591,10 @@ async fn add_key(bugs: &Bugs, org_id: i64, project_id: i64, label: String) -> Re
     if added == 0 {
         return Err(Failure::not_found());
     }
-    bugs.keys.write().expect("no holder of the key cache panics").insert(key, project_id);
+    bugs.keys
+        .write()
+        .expect("no holder of the key cache panics")
+        .insert(key, project_id);
     Ok(())
 }
 
@@ -539,7 +609,13 @@ async fn create_project(
         return Err(Failure::bad_request("a name is required"));
     }
     let repo_id = match form.repo_id.parse::<i64>() {
-        Ok(repo_id) => Some(bugs.shell.repo(ctx.org_id, repo_id).await?.ok_or_else(Failure::not_found)?.id),
+        Ok(repo_id) => Some(
+            bugs.shell
+                .repo(ctx.org_id, repo_id)
+                .await?
+                .ok_or_else(Failure::not_found)?
+                .id,
+        ),
         Err(_) => None,
     };
     let org_id = ctx.org_id;
@@ -591,7 +667,10 @@ async fn revoke_key(
         })
         .await?;
     if revoked == 1 {
-        bugs.keys.write().expect("no holder of the key cache panics").remove(&key);
+        bugs.keys
+            .write()
+            .expect("no holder of the key cache panics")
+            .remove(&key);
     }
     Ok(Redirect::to(&ctx.href(&format!("/{BASE}/projects"))))
 }

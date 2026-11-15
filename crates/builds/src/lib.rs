@@ -1,4 +1,5 @@
 mod client;
+mod pipeline;
 mod ui;
 
 use std::{
@@ -40,8 +41,11 @@ pub struct Builds {
     dir: Arc<PathBuf>,
     uploading: Arc<tokio::sync::Mutex<()>>,
     per_ip: Arc<Limiter>,
+    runner: Arc<pipeline::Runner>,
+    agents: agents::Agents,
 }
 
+#[derive(Clone)]
 struct Build {
     id: i64,
     org_id: i64,
@@ -56,8 +60,7 @@ struct Build {
     finished_at: Option<i64>,
 }
 
-const BUILD_COLUMNS: &str =
-    "id, org_id, repo_id, version, commit_sha, branch, tag, builder, status, started_at, finished_at";
+const BUILD_COLUMNS: &str = "id, org_id, repo_id, version, commit_sha, branch, tag, builder, status, started_at, finished_at";
 
 fn build_row(row: &rusqlite::Row) -> rusqlite::Result<Build> {
     Ok(Build {
@@ -83,7 +86,13 @@ struct Artifact {
 
 fn artifacts(conn: &Connection, build_id: i64) -> rusqlite::Result<Vec<Artifact>> {
     conn.prepare("SELECT name, size, sha256 FROM artifacts WHERE build_id = ?1 ORDER BY name")?
-        .query_map([build_id], |row| Ok(Artifact { name: row.get(0)?, size: row.get(1)?, sha256: row.get(2)? }))?
+        .query_map([build_id], |row| {
+            Ok(Artifact {
+                name: row.get(0)?,
+                size: row.get(1)?,
+                sha256: row.get(2)?,
+            })
+        })?
         .collect()
 }
 
@@ -92,7 +101,9 @@ fn safe_name(name: &str) -> bool {
         && name.len() <= 120
         && !name.starts_with('.')
         && !name.ends_with(PART)
-        && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 fn file_sha256(path: &FsPath) -> std::io::Result<String> {
@@ -123,32 +134,46 @@ fn expire(conn: &Connection, repo_id: i64, tag: &str) -> rusqlite::Result<Vec<i6
 }
 
 impl Builds {
-    pub fn open(data: &FsPath, shell: Shell) -> Result<Self, String> {
+    pub fn open(data: &FsPath, shell: Shell, agents: agents::Agents) -> Result<Self, String> {
         let dir = data.join("builds");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let db = Db::open(&data.join("builds.db"), include_str!("schema.sql")).map_err(|e| e.to_string())?;
-        Ok(Self {
+        let db = Db::open(&data.join("builds.db"), include_str!("schema.sql"))
+            .map_err(|e| e.to_string())?;
+        let builds = Self {
             db,
             shell,
             dir: Arc::new(dir),
             uploading: Arc::default(),
             per_ip: Arc::new(Limiter::new(2.0, 60.0)),
-        })
+            runner: Arc::new(pipeline::Runner::new(data)),
+            agents,
+        };
+        let sweeper = builds.clone();
+        tokio::spawn(async move {
+            if let Err(Failure(_, message)) = sweeper.sweep_runs().await {
+                eprintln!("builds: could not fail interrupted pipeline runs: {message}");
+            }
+        });
+        Ok(builds)
     }
 
     pub fn api(&self) -> Router {
         Router::new()
             .route("/api/builds", post(create_build))
-            .route("/api/builds/{id}/artifacts/{name}", put(upload).get(api_download))
+            .route(
+                "/api/builds/{id}/artifacts/{name}",
+                put(upload).get(api_download),
+            )
             .route("/api/builds/{id}/finish", post(finish))
             .route("/api/builds/latest", get(latest))
+            .route("/api/builds/base", get(base))
             .route("/app.apk", get(app))
             .route("/app.version", get(app_version))
             .with_state(self.clone())
     }
 
     pub fn ui(&self) -> Router {
-        Router::new().nest("/builds", ui::routes()).with_state(self.clone())
+        shell::mount("/builds", ui::routes(), self.clone())
     }
 
     fn build_dir(&self, build_id: i64) -> PathBuf {
@@ -173,20 +198,36 @@ impl Builds {
     async fn build(&self, id: i64) -> Result<Option<Build>, Failure> {
         self.db
             .call(move |conn| {
-                conn.query_row(&format!("SELECT {BUILD_COLUMNS} FROM builds WHERE id = ?1"), [id], build_row).optional()
+                conn.query_row(
+                    &format!("SELECT {BUILD_COLUMNS} FROM builds WHERE id = ?1"),
+                    [id],
+                    build_row,
+                )
+                .optional()
             })
             .await
     }
 
     async fn own_build(&self, repo: &Repo, id: i64) -> Result<Build, Failure> {
-        self.build(id).await?.filter(|build| build.repo_id == repo.id).ok_or_else(Failure::not_found)
+        self.build(id)
+            .await?
+            .filter(|build| build.repo_id == repo.id)
+            .ok_or_else(Failure::not_found)
     }
 
-    async fn serve(&self, build_id: i64, name: &str, who: String, ip: String) -> Result<Response, Failure> {
+    async fn serve(
+        &self,
+        build_id: i64,
+        name: &str,
+        who: String,
+        ip: String,
+    ) -> Result<Response, Failure> {
         if !safe_name(name) {
             return Err(Failure::not_found());
         }
-        let file = tokio::fs::File::open(self.build_dir(build_id).join(name)).await.map_err(|_| Failure::not_found())?;
+        let file = tokio::fs::File::open(self.build_dir(build_id).join(name))
+            .await
+            .map_err(|_| Failure::not_found())?;
         let size = file.metadata().await?.len();
         let logged = name.to_owned();
         self.db
@@ -197,12 +238,19 @@ impl Builds {
                 )
             })
             .await?;
-        let kind = if name.ends_with(".apk") { "application/vnd.android.package-archive" } else { "application/octet-stream" };
+        let kind = if name.ends_with(".apk") {
+            "application/vnd.android.package-archive"
+        } else {
+            "application/octet-stream"
+        };
         Ok((
             [
                 (header::CONTENT_TYPE, kind.to_owned()),
                 (header::CONTENT_LENGTH, size.to_string()),
-                (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"")),
+                (
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{name}\""),
+                ),
                 (header::CACHE_CONTROL, "private, no-store".to_owned()),
             ],
             Body::from_stream(tokio_util::io::ReaderStream::new(file)),
@@ -211,10 +259,19 @@ impl Builds {
     }
 
     async fn deliver(&self, build_id: i64) -> Result<(), Failure> {
-        let Some(build) = self.build(build_id).await? else { return Ok(()) };
+        let Some(build) = self.build(build_id).await? else {
+            return Ok(());
+        };
         let files = self.db.call(move |conn| artifacts(conn, build_id)).await?;
-        let Some((org, home)) = self.shell.org_address(build.org_id).await? else { return Ok(()) };
-        let repo = self.shell.repo(build.org_id, build.repo_id).await?.map(|repo| repo.name).unwrap_or_default();
+        let Some((org, home)) = self.shell.org_address(build.org_id).await? else {
+            return Ok(());
+        };
+        let repo = self
+            .shell
+            .repo(build.org_id, build.repo_id)
+            .await?
+            .map(|repo| repo.name)
+            .unwrap_or_default();
         let dir = self.build_dir(build_id);
         let event = json!({
             "type": format!("build.{}", build.status),
@@ -251,6 +308,9 @@ impl Builds {
     fn deliver_in_background(&self, build_id: i64) {
         let builds = self.clone();
         tokio::spawn(async move {
+            if let Err(Failure(_, message)) = builds.pipeline(build_id).await {
+                eprintln!("builds: pipeline of build {build_id} failed: {message}");
+            }
             if let Err(Failure(_, message)) = builds.deliver(build_id).await {
                 eprintln!("builds: delivery of build {build_id} failed: {message}");
             }
@@ -271,25 +331,58 @@ struct NewBuild {
     builder: String,
     #[serde(default)]
     failed: bool,
+    #[serde(default)]
+    base: String,
+    #[serde(default)]
+    commits: Vec<Value>,
+    #[serde(default)]
+    diffstat: String,
+    #[serde(default)]
+    diff: String,
 }
 
 fn prerelease() -> String {
     "prerelease".to_owned()
 }
 
+impl NewBuild {
+    fn check(&mut self) -> Result<String, Failure> {
+        let fields = [
+            &self.version,
+            &self.commit,
+            &self.branch,
+            &self.tag,
+            &self.builder,
+        ];
+        if self.version.is_empty() || fields.iter().any(|field| field.len() > 200) {
+            return Err(Failure::bad_request(
+                "version is required and every field is at most 200 bytes",
+            ));
+        }
+        if !["prerelease", "release"].contains(&self.tag.as_str()) {
+            return Err(Failure::bad_request("tag is prerelease or release"));
+        }
+        let commits = Value::from(std::mem::take(&mut self.commits)).to_string();
+        if self.base.len() > 200
+            || commits.len() > 2 * client::MAX_DIFF
+            || self.diffstat.len() > client::MAX_DIFF
+            || self.diff.len() > client::MAX_DIFF + 100
+        {
+            return Err(Failure::bad_request(
+                "the commits, diffstat or diff are too large",
+            ));
+        }
+        Ok(commits)
+    }
+}
+
 async fn create_build(
     State(builds): State<Builds>,
     headers: HeaderMap,
-    Json(new): Json<NewBuild>,
+    Json(mut new): Json<NewBuild>,
 ) -> Result<Json<Value>, Failure> {
     let repo = builds.repo(&headers).await?;
-    let fields = [&new.version, &new.commit, &new.branch, &new.tag, &new.builder];
-    if new.version.is_empty() || fields.iter().any(|field| field.len() > 200) {
-        return Err(Failure::bad_request("version is required and every field is at most 200 bytes"));
-    }
-    if !["prerelease", "release"].contains(&new.tag.as_str()) {
-        return Err(Failure::bad_request("tag is prerelease or release"));
-    }
+    let commits = new.check()?;
     let failed = new.failed;
     let (id, stale) = builds
         .db
@@ -318,7 +411,12 @@ async fn create_build(
                     failed.then(now),
                 ),
             )?;
-            Ok((conn.last_insert_rowid(), stale))
+            let id = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO contexts (build_id, base, commits, diffstat, diff) VALUES (?1, ?2, ?3, ?4, ?5)",
+                (id, new.base, commits, new.diffstat, new.diff),
+            )?;
+            Ok((id, stale))
         })
         .await?;
     for build_id in stale {
@@ -327,6 +425,7 @@ async fn create_build(
     if failed {
         builds.deliver_in_background(id);
     }
+    builds.shell.publish(repo.org_id, "builds");
     Ok(Json(json!({ "id": id })))
 }
 
@@ -348,13 +447,17 @@ async fn upload(
     let repo = builds.repo(&headers).await?;
     let build = builds.own_build(&repo, id).await?;
     if build.status != "uploading" || !safe_name(&name) {
-        return Err(Failure::bad_request("build is closed or the artifact name is not allowed"));
+        return Err(Failure::bad_request(
+            "build is closed or the artifact name is not allowed",
+        ));
     }
     let _one_at_a_time = builds.uploading.lock().await;
     let dir = builds.build_dir(id);
     tokio::fs::create_dir_all(&dir).await?;
     let path = dir.join(format!("{name}{PART}"));
-    let received = tokio::fs::metadata(&path).await.map_or(0, |meta| meta.len());
+    let received = tokio::fs::metadata(&path)
+        .await
+        .map_or(0, |meta| meta.len());
     if received == 0 && artifact_count(&dir).await? >= MAX_ARTIFACTS_PER_BUILD {
         return Err(Failure::bad_request("too many artifacts in this build"));
     }
@@ -375,15 +478,24 @@ async fn artifact_count(dir: &std::path::Path) -> std::io::Result<usize> {
 }
 
 async fn append(path: &std::path::Path, mut body: Body, received: u64) -> Result<u64, Failure> {
-    let mut file = tokio::fs::OpenOptions::new().create(true).append(true).open(path).await?;
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await?;
     let mut written = 0u64;
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|_| Failure::bad_request("upload interrupted"))?;
-        let Ok(data) = frame.into_data() else { continue };
+        let Ok(data) = frame.into_data() else {
+            continue;
+        };
         written += data.len() as u64;
         if written > MAX_CHUNK || received + written > MAX_ARTIFACT {
             file.set_len(received).await?;
-            return Err(Failure::new(StatusCode::PAYLOAD_TOO_LARGE, "chunk or artifact too large"));
+            return Err(Failure::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "chunk or artifact too large",
+            ));
         }
         file.write_all(&data).await?;
     }
@@ -396,27 +508,47 @@ struct Finish {
     artifacts: HashMap<String, String>,
 }
 
-fn verify(dir: &std::path::Path, expected: &HashMap<String, String>) -> std::io::Result<Result<Vec<Artifact>, String>> {
+fn verify(
+    dir: &std::path::Path,
+    expected: &HashMap<String, String>,
+) -> std::io::Result<Result<Vec<Artifact>, String>> {
     let mut files = Vec::new();
     for (name, expected) in expected {
         if !safe_name(name) {
             return Ok(Err(format!("{name}: name not allowed")));
         }
         let part = dir.join(format!("{name}{PART}"));
-        let Ok(meta) = std::fs::metadata(&part) else { return Ok(Err(format!("{name}: never uploaded"))) };
+        let Ok(meta) = std::fs::metadata(&part) else {
+            return Ok(Err(format!("{name}: never uploaded")));
+        };
         let actual = file_sha256(&part)?;
         if !actual.eq_ignore_ascii_case(expected) {
-            return Ok(Err(format!("{name}: sha256 is {actual}, sender expected {expected}")));
+            return Ok(Err(format!(
+                "{name}: sha256 is {actual}, sender expected {expected}"
+            )));
         }
-        files.push(Artifact { name: name.clone(), size: meta.len() as i64, sha256: actual });
+        files.push(Artifact {
+            name: name.clone(),
+            size: meta.len() as i64,
+            sha256: actual,
+        });
     }
     for file in &files {
-        std::fs::rename(dir.join(format!("{}{PART}", file.name)), dir.join(&file.name))?;
+        std::fs::rename(
+            dir.join(format!("{}{PART}", file.name)),
+            dir.join(&file.name),
+        )?;
     }
     Ok(Ok(files))
 }
 
-fn close(conn: &mut rusqlite::Connection, id: i64, files: &[Artifact], repo_id: i64, tag: &str) -> rusqlite::Result<Vec<i64>> {
+fn close(
+    conn: &mut rusqlite::Connection,
+    id: i64,
+    files: &[Artifact],
+    repo_id: i64,
+    tag: &str,
+) -> rusqlite::Result<Vec<i64>> {
     let tx = conn.transaction()?;
     for file in files {
         tx.execute(
@@ -424,7 +556,10 @@ fn close(conn: &mut rusqlite::Connection, id: i64, files: &[Artifact], repo_id: 
             (id, &file.name, file.size, &file.sha256),
         )?;
     }
-    tx.execute("UPDATE builds SET status = 'finished', finished_at = ?2 WHERE id = ?1", (id, now()))?;
+    tx.execute(
+        "UPDATE builds SET status = 'finished', finished_at = ?2 WHERE id = ?1",
+        (id, now()),
+    )?;
     let expired = expire(&tx, repo_id, tag)?;
     tx.commit()?;
     Ok(expired)
@@ -447,13 +582,24 @@ async fn finish(
     let files = checked.map_err(|message| Failure(StatusCode::UNPROCESSABLE_ENTITY, message))?;
 
     let (repo_id, tag) = (build.repo_id, build.tag);
-    let expired = builds.db.call(move |conn| close(conn, id, &files, repo_id, &tag)).await?;
+    let expired = builds
+        .db
+        .call(move |conn| close(conn, id, &files, repo_id, &tag))
+        .await?;
     for build_id in expired {
         let _ = tokio::fs::remove_dir_all(builds.build_dir(build_id)).await;
     }
     builds.deliver_in_background(id);
-    let home = builds.shell.org_address(build.org_id).await?.map(|(_, home)| home).unwrap_or_default();
-    Ok(Json(json!({ "id": id, "url": format!("{home}/builds/{id}") })))
+    builds.shell.publish(build.org_id, "builds");
+    let home = builds
+        .shell
+        .org_address(build.org_id)
+        .await?
+        .map(|(_, home)| home)
+        .unwrap_or_default();
+    Ok(Json(
+        json!({ "id": id, "url": format!("{home}/builds/{id}") }),
+    ))
 }
 
 async fn api_download(
@@ -463,7 +609,14 @@ async fn api_download(
 ) -> Result<Response, Failure> {
     let repo = builds.repo(&headers).await?;
     let build = builds.own_build(&repo, id).await?;
-    builds.serve(build.id, &name, format!("token:{}", repo.name), client_ip(&headers)).await
+    builds
+        .serve(
+            build.id,
+            &name,
+            format!("token:{}", repo.name),
+            client_ip(&headers),
+        )
+        .await
 }
 
 #[derive(Deserialize)]
@@ -494,7 +647,41 @@ async fn latest(
         })
         .await?;
     let build_id = build_id.ok_or_else(Failure::not_found)?;
-    builds.serve(build_id, &query.name, format!("token:{}", repo.name), client_ip(&headers)).await
+    builds
+        .serve(
+            build_id,
+            &query.name,
+            format!("token:{}", repo.name),
+            client_ip(&headers),
+        )
+        .await
+}
+
+#[derive(Deserialize)]
+struct BaseQuery {
+    #[serde(default = "prerelease")]
+    tag: String,
+}
+
+async fn base(
+    State(builds): State<Builds>,
+    Query(query): Query<BaseQuery>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, Failure> {
+    let repo = builds.repo(&headers).await?;
+    let repo_id = repo.id;
+    let commit: Option<String> = builds
+        .db
+        .call(move |conn| {
+            conn.query_row(
+                "SELECT commit_sha FROM builds WHERE repo_id = ?1 AND tag = ?2 AND status = 'finished' AND commit_sha != '' ORDER BY id DESC LIMIT 1",
+                (repo_id, query.tag),
+                |row| row.get(0),
+            )
+            .optional()
+        })
+        .await?;
+    Ok(Json(json!({ "commit": commit.unwrap_or_default() })))
 }
 
 #[derive(Deserialize)]
@@ -502,12 +689,18 @@ struct AppQuery {
     v: Option<String>,
 }
 
-async fn app(State(builds): State<Builds>, Query(query): Query<AppQuery>, headers: HeaderMap) -> Result<Response, Failure> {
+async fn app(
+    State(builds): State<Builds>,
+    Query(query): Query<AppQuery>,
+    headers: HeaderMap,
+) -> Result<Response, Failure> {
     if !builds.per_ip.allow(&client_ip(&headers)) {
         return Err(Failure::new(StatusCode::TOO_MANY_REQUESTS, "slow down"));
     }
     let (build_id, _) = release_apk(&builds, query.v).await?;
-    builds.serve(build_id, "chi.apk", "app".to_owned(), client_ip(&headers)).await
+    builds
+        .serve(build_id, "chi.apk", "app".to_owned(), client_ip(&headers))
+        .await
 }
 
 async fn app_version(State(builds): State<Builds>) -> Result<String, Failure> {
@@ -556,12 +749,20 @@ mod tests {
                 (id, tag),
             )
             .unwrap();
-            conn.execute("INSERT INTO artifacts (build_id, name, size, sha256) VALUES (?1, 'a.apk', 1, '')", [id]).unwrap();
+            conn.execute(
+                "INSERT INTO artifacts (build_id, name, size, sha256) VALUES (?1, 'a.apk', 1, '')",
+                [id],
+            )
+            .unwrap();
         }
         assert_eq!(expire(&conn, 1, "prerelease").unwrap(), [1]);
-        let left: i64 = conn.query_row("SELECT COUNT(*) FROM artifacts", [], |row| row.get(0)).unwrap();
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM artifacts", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(left, KEPT_BUILDS_WITH_FILES + 1);
-        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM builds", [], |row| row.get(0)).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM builds", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(rows, KEPT_BUILDS_WITH_FILES + 2);
     }
 
@@ -571,6 +772,9 @@ mod tests {
         std::fs::write(&path, b"abc").unwrap();
         let digest = file_sha256(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(digest, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(
+            digest,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 }

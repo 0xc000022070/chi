@@ -1,7 +1,4 @@
-use argon2::{
-    Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
-    password_hash::SaltString,
-};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use axum::{
     Extension, Form, Router,
     extract::{Path, Query, Request, State},
@@ -21,8 +18,19 @@ use crate::{
     url_encode,
 };
 
-const RESERVED: [&str; 11] =
-    ["api", "login", "logout", "orgs", "invite", "sso", "callback", "mcp", "authorize", "token", "register"];
+const RESERVED: [&str; 11] = [
+    "api",
+    "login",
+    "logout",
+    "orgs",
+    "invite",
+    "sso",
+    "callback",
+    "mcp",
+    "authorize",
+    "token",
+    "register",
+];
 
 const COOKIE: &str = "chi_session";
 pub(crate) const SESSION_TTL: i64 = 30 * 86_400;
@@ -43,7 +51,11 @@ impl Visit {
 }
 
 pub(crate) fn local_path(next: &str) -> &str {
-    if next.starts_with('/') && !next.starts_with("//") && !next.contains('\\') { next } else { "/" }
+    if next.starts_with('/') && !next.starts_with("//") && !next.contains('\\') {
+        next
+    } else {
+        "/"
+    }
 }
 
 fn session_token(headers: &HeaderMap) -> Option<&str> {
@@ -58,7 +70,8 @@ fn session_token(headers: &HeaderMap) -> Option<&str> {
 pub(crate) fn hash_password(password: &str) -> Result<String, Failure> {
     let mut salt = [0u8; 16];
     getrandom::fill(&mut salt).expect("os entropy");
-    let salt = SaltString::encode_b64(&salt).map_err(|e| Failure(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let salt = SaltString::encode_b64(&salt)
+        .map_err(|e| Failure(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
         .map(|hash| hash.to_string())
@@ -66,7 +79,11 @@ pub(crate) fn hash_password(password: &str) -> Result<String, Failure> {
 }
 
 pub(crate) fn password_matches(password: &str, hash: &str) -> bool {
-    PasswordHash::new(hash).is_ok_and(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
+    PasswordHash::new(hash).is_ok_and(|parsed| {
+        Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok()
+    })
 }
 
 impl Shell {
@@ -81,6 +98,7 @@ impl Shell {
             .route("/settings/repos/{id}/token", post(rotate_repo_token))
             .route("/settings/providers", post(create_provider))
             .route("/settings/providers/{id}/delete", post(delete_provider))
+            .route("/events", get(events))
             .with_state(self.clone())
             .merge(rooms);
         let pages = Router::new()
@@ -92,27 +110,52 @@ impl Shell {
             .route("/sso/{provider_id}", get(sso_start))
             .route("/callback", get(sso_callback))
             .merge(oauth::routes())
-            .route("/sans.woff2", get(|| async { font(include_bytes!("../fonts/sans.woff2")) }))
-            .route("/mono.woff2", get(|| async { font(include_bytes!("../fonts/mono.woff2")) }))
+            .route(
+                "/sans.woff2",
+                get(|| async { font(include_bytes!("../fonts/sans.woff2")) }),
+            )
+            .route(
+                "/mono.woff2",
+                get(|| async { font(include_bytes!("../fonts/mono.woff2")) }),
+            )
             .with_state(self.clone())
             .fallback_service(middleware::from_fn_with_state(self.clone(), guard).layer(org_side))
             .layer(middleware::from_fn_with_state(self.clone(), visit));
         api.merge(pages)
     }
 
-    async fn start_session(&self, user_id: i64, provider_id: Option<i64>, to: &str) -> Result<Response, Failure> {
+    async fn start_session(
+        &self,
+        user_id: i64,
+        provider_id: Option<i64>,
+        to: &str,
+    ) -> Result<Response, Failure> {
         let token = secret();
         let hash = sha256_hex(token.as_bytes());
-        let ttl = if provider_id.is_some() { EXTERNAL_SESSION_TTL } else { SESSION_TTL };
-        self.db.call(move |conn| store::create_session(conn, &hash, user_id, provider_id, now() + ttl)).await?;
-        let secure = if self.url.starts_with("https") { "; Secure" } else { "" };
-        let cookie = format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ttl}{secure}");
+        let ttl = if provider_id.is_some() {
+            EXTERNAL_SESSION_TTL
+        } else {
+            SESSION_TTL
+        };
+        self.db
+            .call(move |conn| store::create_session(conn, &hash, user_id, provider_id, now() + ttl))
+            .await?;
+        let secure = if self.url.starts_with("https") {
+            "; Secure"
+        } else {
+            ""
+        };
+        let cookie =
+            format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ttl}{secure}");
         Ok(([(header::SET_COOKIE, cookie)], Redirect::to(to)).into_response())
     }
 }
 
 fn font(bytes: &'static [u8]) -> Response {
-    let headers = [(header::CONTENT_TYPE, "font/woff2"), (header::CACHE_CONTROL, "public, max-age=604800")];
+    let headers = [
+        (header::CONTENT_TYPE, "font/woff2"),
+        (header::CACHE_CONTROL, "public, max-age=604800"),
+    ];
     (headers, bytes).into_response()
 }
 
@@ -121,7 +164,11 @@ const NO_PROXY_REWRITES: HeaderValue = HeaderValue::from_static("private, no-tra
 async fn visit(State(shell): State<Shell>, mut req: Request, next: Next) -> Response {
     let token_hash = session_token(req.headers()).map(|token| sha256_hex(token.as_bytes()));
     let user = match token_hash.clone() {
-        Some(hash) => match shell.db.call(move |conn| store::session(conn, &hash, now())).await {
+        Some(hash) => match shell
+            .db
+            .call(move |conn| store::session(conn, &hash, now()))
+            .await
+        {
             Ok(user) => user,
             Err(failure) => return failure.into_response(),
         },
@@ -129,7 +176,10 @@ async fn visit(State(shell): State<Shell>, mut req: Request, next: Next) -> Resp
     };
     req.extensions_mut().insert(Visit { user, token_hash });
     let mut response = next.run(req).await;
-    response.headers_mut().entry(header::CACHE_CONTROL).or_insert(NO_PROXY_REWRITES);
+    response
+        .headers_mut()
+        .entry(header::CACHE_CONTROL)
+        .or_insert(NO_PROXY_REWRITES);
     response
 }
 
@@ -148,12 +198,16 @@ async fn guard(State(shell): State<Shell>, mut req: Request, next: Next) -> Resp
         Some(query) => format!("/{rest}?{query}"),
         None => format!("/{rest}"),
     };
-    let Ok(inner) = inner.parse() else { return Failure::not_found().into_response() };
+    let Ok(inner) = inner.parse() else {
+        return Failure::not_found().into_response();
+    };
     let (slug, who) = (slug.to_owned(), user.clone());
     let found = shell
         .db
         .call(move |conn| {
-            let Some(org) = store::org_by_slug(conn, &slug)? else { return Ok(None) };
+            let Some(org) = store::org_by_slug(conn, &slug)? else {
+                return Ok(None);
+            };
             let role = match &who {
                 Some(user) => store::role_in(conn, user, org.id)?,
                 None => None,
@@ -170,7 +224,9 @@ async fn guard(State(shell): State<Shell>, mut req: Request, next: Next) -> Resp
         let path = req.uri().path_and_query().map_or("/", |pq| pq.as_str());
         return Redirect::to(&format!("/login?next={}", url_encode(path))).into_response();
     };
-    let Some(role) = role else { return Failure::forbidden().into_response() };
+    let Some(role) = role else {
+        return Failure::forbidden().into_response();
+    };
     *req.uri_mut() = inner;
     req.extensions_mut().insert(Ctx {
         org_id: org.id,
@@ -183,14 +239,43 @@ async fn guard(State(shell): State<Shell>, mut req: Request, next: Next) -> Resp
     next.run(req).await
 }
 
+async fn events(State(shell): State<Shell>, Extension(ctx): Extension<Ctx>) -> Response {
+    let stream = futures_util::stream::unfold(
+        (shell.subscribe(), ctx.org_id),
+        |(mut rx, org_id)| async move {
+            loop {
+                match rx.recv().await {
+                    Ok((org, topic)) if org == org_id => {
+                        let event = axum::response::sse::Event::default().data(topic);
+                        return Some((Ok::<_, std::convert::Infallible>(event), (rx, org_id)));
+                    }
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                }
+            }
+        },
+    );
+    axum::response::sse::Sse::new(stream)
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response()
+}
+
 async fn org_home(Extension(ctx): Extension<Ctx>) -> Redirect {
     Redirect::to(&ctx.href("/bugs"))
 }
 
-async fn home(State(shell): State<Shell>, Extension(visit): Extension<Visit>) -> Result<Response, Failure> {
-    let Some(user) = visit.user else { return Ok(Redirect::to("/login").into_response()) };
+async fn home(
+    State(shell): State<Shell>,
+    Extension(visit): Extension<Visit>,
+) -> Result<Response, Failure> {
+    let Some(user) = visit.user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
     let who = user.clone();
-    let orgs = shell.db.call(move |conn| store::orgs_of(conn, &who)).await?;
+    let orgs = shell
+        .db
+        .call(move |conn| store::orgs_of(conn, &who))
+        .await?;
     let admin = user.admin && user.provider.is_none();
     Ok(hub_page(
         "orgs",
@@ -237,11 +322,17 @@ async fn create_org(
     let (name, slug) = (form.name.trim().to_owned(), form.slug.trim().to_owned());
     let slug_ok = !slug.is_empty()
         && !RESERVED.contains(&slug.as_str())
-        && slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
     if name.is_empty() || !slug_ok {
         return Err(Failure::bad_request("invalid name or slug"));
     }
-    if !shell.db.call(move |conn| store::create_org(conn, &slug, &name)).await? {
+    if !shell
+        .db
+        .call(move |conn| store::create_org(conn, &slug, &name))
+        .await?
+    {
         return Err(Failure::bad_request("slug already in use"));
     }
     Ok(Redirect::to("/").into_response())
@@ -253,7 +344,12 @@ struct Target {
     next: String,
 }
 
-async fn login_form(shell: &Shell, target: &Target, signed_in: bool, notice: &str) -> Result<Response, Failure> {
+async fn login_form(
+    shell: &Shell,
+    target: &Target,
+    signed_in: bool,
+    notice: &str,
+) -> Result<Response, Failure> {
     let slug = split_org(&target.next).0.to_owned();
     let providers = shell
         .db
@@ -312,10 +408,16 @@ async fn login(
     Form(form): Form<Credentials>,
 ) -> Result<Response, Failure> {
     if !shell.logins.allow(&client_ip(&headers)) {
-        return Err(Failure::new(StatusCode::TOO_MANY_REQUESTS, "too many attempts, wait a few minutes"));
+        return Err(Failure::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many attempts, wait a few minutes",
+        ));
     }
     let email = form.email.trim().to_lowercase();
-    let known = shell.db.call(move |conn| store::password_hash(conn, &email)).await?;
+    let known = shell
+        .db
+        .call(move |conn| store::password_hash(conn, &email))
+        .await?;
     let password = form.password;
     let user_id = tokio::task::spawn_blocking(move || {
         known.and_then(|(user_id, hash)| password_matches(&password, &hash).then_some(user_id))
@@ -324,12 +426,20 @@ async fn login(
     let Some(user_id) = user_id else {
         return login_form(&shell, &form.target, false, "Wrong email or password.").await;
     };
-    shell.start_session(user_id, None, local_path(&form.target.next)).await
+    shell
+        .start_session(user_id, None, local_path(&form.target.next))
+        .await
 }
 
-async fn logout(State(shell): State<Shell>, Extension(visit): Extension<Visit>) -> Result<Response, Failure> {
+async fn logout(
+    State(shell): State<Shell>,
+    Extension(visit): Extension<Visit>,
+) -> Result<Response, Failure> {
     if let Some(hash) = visit.token_hash {
-        shell.db.call(move |conn| store::delete_session(conn, &hash)).await?;
+        shell
+            .db
+            .call(move |conn| store::delete_session(conn, &hash))
+            .await?;
     }
     let cookie = format!("{COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
     Ok(([(header::SET_COOKIE, cookie)], Redirect::to("/login")).into_response())
@@ -341,8 +451,15 @@ async fn invite_page(
     Path(token): Path<String>,
 ) -> Result<Response, Failure> {
     let hash = sha256_hex(token.as_bytes());
-    if !shell.db.call(move |conn| store::invite_exists(conn, &hash, now())).await? {
-        return Err(Failure::new(StatusCode::GONE, "this invite is used or expired"));
+    if !shell
+        .db
+        .call(move |conn| store::invite_exists(conn, &hash, now()))
+        .await?
+    {
+        return Err(Failure::new(
+            StatusCode::GONE,
+            "this invite is used or expired",
+        ));
     }
     Ok(hub_page(
         "invite",
@@ -385,18 +502,33 @@ async fn accept_invite(
         None => {
             let email = form.email.trim().to_lowercase();
             if !email.contains('@') || form.password.len() < MIN_PASSWORD {
-                return Err(Failure::bad_request("a valid email and a longer password are required"));
+                return Err(Failure::bad_request(
+                    "a valid email and a longer password are required",
+                ));
             }
             let password = form.password;
-            let password_hash = tokio::task::spawn_blocking(move || hash_password(&password)).await??;
-            Joiner::New { email, password_hash }
+            let password_hash =
+                tokio::task::spawn_blocking(move || hash_password(&password)).await??;
+            Joiner::New {
+                email,
+                password_hash,
+            }
         }
     };
     let hash = sha256_hex(token.as_bytes());
-    match shell.db.call(move |conn| store::accept_invite(conn, &hash, now(), joiner)).await? {
+    match shell
+        .db
+        .call(move |conn| store::accept_invite(conn, &hash, now(), joiner))
+        .await?
+    {
         Joined::User(user_id) => shell.start_session(user_id, None, "/").await,
-        Joined::BadInvite => Err(Failure::new(StatusCode::GONE, "this invite is used or expired")),
-        Joined::EmailTaken => Err(Failure::bad_request("that email already has an account: sign in first, then open the invite again")),
+        Joined::BadInvite => Err(Failure::new(
+            StatusCode::GONE,
+            "this invite is used or expired",
+        )),
+        Joined::EmailTaken => Err(Failure::bad_request(
+            "that email already has an account: sign in first, then open the invite again",
+        )),
     }
 }
 
@@ -407,7 +539,11 @@ async fn sso_start(
 ) -> Result<Response, Failure> {
     let provider = shell
         .db
-        .call(move |conn| Ok(store::providers(conn)?.into_iter().find(|p| p.id == provider_id)))
+        .call(move |conn| {
+            Ok(store::providers(conn)?
+                .into_iter()
+                .find(|p| p.id == provider_id))
+        })
         .await?
         .ok_or_else(Failure::not_found)?;
     let issuer = provider.issuer.clone();
@@ -416,7 +552,11 @@ async fn sso_start(
         .map_err(|e| Failure(StatusCode::BAD_GATEWAY, e))?;
     let verifier = secret();
     let challenge = sso::challenge(&verifier);
-    let state = shell.hold(Pending { provider_id, verifier, next: target.next });
+    let state = shell.hold(Pending {
+        provider_id,
+        verifier,
+        next: target.next,
+    });
     Ok(Redirect::to(&format!(
         "{}?response_type=code&client_id={}&redirect_uri={}&scope=identity&code_challenge={challenge}&code_challenge_method=S256&state={state}",
         endpoints.authorization,
@@ -440,20 +580,39 @@ async fn sso_callback(
     State(shell): State<Shell>,
     Query(query): Query<Callback>,
 ) -> Result<Response, Failure> {
-    let Some(Pending { provider_id, verifier, next }) = shell.take(&query.state) else {
+    let Some(Pending {
+        provider_id,
+        verifier,
+        next,
+    }) = shell.take(&query.state)
+    else {
         return Err(Failure::bad_request("sign-in expired, start again"));
     };
     if query.code.is_empty() {
         let target = Target { next };
-        return login_form(&shell, &target, false, &format!("Sign-in was not completed: {}", query.error)).await;
+        return login_form(
+            &shell,
+            &target,
+            false,
+            &format!("Sign-in was not completed: {}", query.error),
+        )
+        .await;
     }
     let provider = shell
         .db
-        .call(move |conn| Ok(store::providers(conn)?.into_iter().find(|p| p.id == provider_id)))
+        .call(move |conn| {
+            Ok(store::providers(conn)?
+                .into_iter()
+                .find(|p| p.id == provider_id))
+        })
         .await?
         .ok_or_else(Failure::not_found)?;
     let redirect_uri = shell.url("/callback");
-    let (issuer, client_id, code) = (provider.issuer.clone(), provider.client_id.clone(), query.code);
+    let (issuer, client_id, code) = (
+        provider.issuer.clone(),
+        provider.client_id.clone(),
+        query.code,
+    );
     let (subject, email) = tokio::task::spawn_blocking(move || {
         let endpoints = sso::discover(&issuer)?;
         sso::identify(&endpoints, &client_id, &code, &verifier, &redirect_uri)
@@ -465,10 +624,19 @@ async fn sso_callback(
         .db
         .call(move |conn| {
             let user_id = store::sign_in_external(conn, provider_id, org_id, &subject, &email)?;
-            Ok((user_id, store::org(conn, org_id)?.map(|org| org.slug).unwrap_or_default()))
+            Ok((
+                user_id,
+                store::org(conn, org_id)?
+                    .map(|org| org.slug)
+                    .unwrap_or_default(),
+            ))
         })
         .await?;
-    let to = if next.is_empty() { format!("/{slug}") } else { local_path(&next).to_owned() };
+    let to = if next.is_empty() {
+        format!("/{slug}")
+    } else {
+        local_path(&next).to_owned()
+    };
     shell.start_session(user_id, Some(provider_id), &to).await
 }
 
@@ -506,6 +674,10 @@ fn repos_section(repos: &[store::Repo], maintainer: bool) -> Markup {
                     form.stack method="post" action=(format!("settings/repos/{}", repo.id)) {
                         label { "Type" select name="kind" { (kind_options(&repo.kind)) } }
                         label { "URL" input name="url" value=(repo.url) placeholder="https://github.com/org/repo"; }
+                        label {
+                            "Pipeline flake, {rev} becomes the built commit"
+                            input name="pipeline" value=(repo.pipeline) placeholder="github:org/repo/{rev}";
+                        }
                         div.actions {
                             button { "save" }
                             button formaction=(format!("settings/repos/{}/token", repo.id)) { "new upload token" }
@@ -590,13 +762,23 @@ fn providers_section(providers: &[store::Provider]) -> Markup {
     }
 }
 
-async fn settings(State(shell): State<Shell>, Extension(ctx): Extension<Ctx>) -> Result<Response, Failure> {
+async fn settings(
+    State(shell): State<Shell>,
+    Extension(ctx): Extension<Ctx>,
+) -> Result<Response, Failure> {
     let org_id = ctx.org_id;
     let (members, repos, providers) = shell
         .db
         .call(move |conn| {
-            let providers: Vec<_> = store::providers(conn)?.into_iter().filter(|p| p.org_id == org_id).collect();
-            Ok((store::members(conn, org_id)?, store::repos(conn, org_id)?, providers))
+            let providers: Vec<_> = store::providers(conn)?
+                .into_iter()
+                .filter(|p| p.org_id == org_id)
+                .collect();
+            Ok((
+                store::members(conn, org_id)?,
+                store::repos(conn, org_id)?,
+                providers,
+            ))
         })
         .await?;
     let owner = ctx.role >= Role::Owner;
@@ -631,7 +813,10 @@ async fn save_member(
         other => Some(Role::parse(other).ok_or_else(|| Failure::bad_request("unknown role"))?),
     };
     let org_id = ctx.org_id;
-    shell.db.call(move |conn| store::set_role(conn, org_id, form.user_id, role)).await?;
+    shell
+        .db
+        .call(move |conn| store::set_role(conn, org_id, form.user_id, role))
+        .await?;
     Ok(Redirect::to(&ctx.href("/settings")).into_response())
 }
 
@@ -669,7 +854,12 @@ async fn create_invite(
         .call(move |conn| store::create_invite(conn, &hash, Some(org_id), role, now() + INVITE_TTL))
         .await?;
     let link = shell.url(&format!("/invite/{token}"));
-    Ok(once(&ctx, "Invite link", &format!("Valid for 7 days, one use, role {}.", role.as_str()), &link))
+    Ok(once(
+        &ctx,
+        "Invite link",
+        &format!("Valid for 7 days, one use, role {}.", role.as_str()),
+        &link,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -680,10 +870,12 @@ struct RepoForm {
     url: String,
     #[serde(default)]
     kind: String,
+    #[serde(default)]
+    pipeline: String,
 }
 
 impl RepoForm {
-    fn checked(self) -> Result<(String, String, String), Failure> {
+    fn checked(self) -> Result<(String, String, String, String), Failure> {
         let url = self.url.trim().trim_end_matches('/').to_owned();
         if !(url.is_empty() || url.starts_with("https://")) {
             return Err(Failure::bad_request("the url must be https"));
@@ -691,7 +883,14 @@ impl RepoForm {
         if !(self.kind.is_empty() || REPO_KINDS.iter().any(|(kind, _)| *kind == self.kind)) {
             return Err(Failure::bad_request("unknown repo type"));
         }
-        Ok((self.name.trim().to_owned(), url, self.kind))
+        let pipeline = self.pipeline.trim().to_owned();
+        if pipeline.len() > 300
+            || pipeline.chars().any(char::is_whitespace)
+            || pipeline.starts_with('-')
+        {
+            return Err(Failure::bad_request("the pipeline is one flake reference"));
+        }
+        Ok((self.name.trim().to_owned(), url, self.kind, pipeline))
     }
 }
 
@@ -701,13 +900,21 @@ async fn create_repo(
     Form(form): Form<RepoForm>,
 ) -> Result<Response, Failure> {
     ctx.require(Role::Maintainer)?;
-    let (name, url, kind) = form.checked()?;
+    let (name, url, kind, _) = form.checked()?;
     if name.is_empty() {
         return Err(Failure::bad_request("a name is required"));
     }
     let token = secret();
-    let (hash, org_id, label) = (sha256_hex(token.as_bytes()), ctx.org_id, format!("Upload token for {name}."));
-    if !shell.db.call(move |conn| store::create_repo(conn, org_id, &name, &url, &kind, &hash)).await? {
+    let (hash, org_id, label) = (
+        sha256_hex(token.as_bytes()),
+        ctx.org_id,
+        format!("Upload token for {name}."),
+    );
+    if !shell
+        .db
+        .call(move |conn| store::create_repo(conn, org_id, &name, &url, &kind, &hash))
+        .await?
+    {
         return Err(Failure::bad_request("a repo with that name already exists"));
     }
     Ok(once(&ctx, "Upload token", &label, &token))
@@ -720,9 +927,12 @@ async fn update_repo(
     Form(form): Form<RepoForm>,
 ) -> Result<Response, Failure> {
     ctx.require(Role::Maintainer)?;
-    let (_, url, kind) = form.checked()?;
+    let (_, url, kind, pipeline) = form.checked()?;
     let org_id = ctx.org_id;
-    shell.db.call(move |conn| store::update_repo(conn, org_id, id, &url, &kind)).await?;
+    shell
+        .db
+        .call(move |conn| store::update_repo(conn, org_id, id, &url, &kind, &pipeline))
+        .await?;
     Ok(Redirect::to(&ctx.href("/settings")).into_response())
 }
 
@@ -739,7 +949,12 @@ async fn rotate_repo_token(
         .call(move |conn| store::rotate_repo_token(conn, org_id, id, &hash))
         .await?
         .ok_or_else(Failure::not_found)?;
-    Ok(once(&ctx, "Upload token", &format!("New upload token for {name}. The old one stopped working."), &token))
+    Ok(once(
+        &ctx,
+        "Upload token",
+        &format!("New upload token for {name}. The old one stopped working."),
+        &token,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -755,14 +970,22 @@ async fn create_provider(
     Form(form): Form<ProviderForm>,
 ) -> Result<Response, Failure> {
     ctx.require(Role::Owner)?;
-    let (name, issuer) = (form.name.trim().to_owned(), form.issuer.trim().trim_end_matches('/').to_owned());
-    if name.is_empty() || !(issuer.starts_with("https://") || issuer.starts_with("http://localhost:")) {
-        return Err(Failure::bad_request("a name and an https issuer are required"));
+    let (name, issuer) = (
+        form.name.trim().to_owned(),
+        form.issuer.trim().trim_end_matches('/').to_owned(),
+    );
+    if name.is_empty()
+        || !(issuer.starts_with("https://") || issuer.starts_with("http://localhost:"))
+    {
+        return Err(Failure::bad_request(
+            "a name and an https issuer are required",
+        ));
     }
     let (probe, redirect_uri) = (issuer.clone(), shell.url("/callback"));
-    let client_id = tokio::task::spawn_blocking(move || sso::register(&sso::discover(&probe)?, &redirect_uri))
-        .await?
-        .map_err(|e| Failure(StatusCode::BAD_GATEWAY, e))?;
+    let client_id =
+        tokio::task::spawn_blocking(move || sso::register(&sso::discover(&probe)?, &redirect_uri))
+            .await?
+            .map_err(|e| Failure(StatusCode::BAD_GATEWAY, e))?;
     let (org_id, trusted) = (ctx.org_id, form.trusted == "1");
     shell
         .db
@@ -778,7 +1001,10 @@ async fn delete_provider(
 ) -> Result<Response, Failure> {
     ctx.require(Role::Owner)?;
     let org_id = ctx.org_id;
-    shell.db.call(move |conn| store::delete_provider(conn, org_id, id)).await?;
+    shell
+        .db
+        .call(move |conn| store::delete_provider(conn, org_id, id))
+        .await?;
     Ok(Redirect::to(&ctx.href("/settings")).into_response())
 }
 
@@ -805,7 +1031,10 @@ mod tests {
     #[test]
     fn session_cookie_is_found_among_others() {
         let mut headers = HeaderMap::new();
-        headers.insert(header::COOKIE, "a=1; chi_session=abc; chi_session_x=no".parse().unwrap());
+        headers.insert(
+            header::COOKIE,
+            "a=1; chi_session=abc; chi_session_x=no".parse().unwrap(),
+        );
         assert_eq!(session_token(&headers), Some("abc"));
     }
 

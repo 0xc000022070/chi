@@ -1,3 +1,4 @@
+mod markdown;
 mod oauth;
 mod sso;
 mod store;
@@ -13,6 +14,7 @@ use std::{
 };
 
 use axum::{
+    Router,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -21,8 +23,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
+pub use markdown::{autolink, identifiers, markdown};
 pub use oauth::bearer;
-pub use store::Repo;
+pub use store::{Person, Repo};
 pub use ui::{glyph, org_page, repo_glyph};
 
 #[derive(Debug)]
@@ -78,12 +81,21 @@ impl Db {
         f: impl FnOnce(&mut Connection) -> rusqlite::Result<T> + Send + 'static,
     ) -> Result<T, Failure> {
         let conn = self.0.clone();
-        Ok(tokio::task::spawn_blocking(move || f(&mut conn.lock().expect("a panicking query aborts the process"))).await??)
+        Ok(tokio::task::spawn_blocking(move || {
+            f(&mut conn.lock().expect("a panicking query aborts the process"))
+        })
+        .await??)
     }
 }
 
+pub fn mount<S: Clone + Send + Sync + 'static>(path: &str, routes: Router<S>, state: S) -> Router {
+    Router::new().nest(path, routes).with_state(state)
+}
+
 pub fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 pub fn utc(ts: i64) -> String {
@@ -96,7 +108,11 @@ pub fn utc(ts: i64) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02} {:02}:{:02}Z", secs / 3600, secs % 3600 / 60)
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}Z",
+        secs / 3600,
+        secs % 3600 / 60
+    )
 }
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -117,7 +133,9 @@ pub fn url_encode(value: &str) -> String {
     value
         .bytes()
         .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => (b as char).to_string(),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
             _ => format!("%{b:02X}"),
         })
         .collect()
@@ -141,7 +159,11 @@ const MAX_KEYS: usize = 20_000;
 
 impl Limiter {
     pub fn new(per_second: f64, burst: f64) -> Self {
-        Self { buckets: Mutex::new(HashMap::new()), per_second, burst }
+        Self {
+            buckets: Mutex::new(HashMap::new()),
+            per_second,
+            burst,
+        }
     }
 
     pub fn allow(&self, key: &str) -> bool {
@@ -149,7 +171,10 @@ impl Limiter {
     }
 
     fn allow_at(&self, key: &str, now: i64) -> bool {
-        let mut buckets = self.buckets.lock().expect("no holder of the bucket map panics");
+        let mut buckets = self
+            .buckets
+            .lock()
+            .expect("no holder of the bucket map panics");
         if buckets.len() >= MAX_KEYS {
             buckets.clear();
         }
@@ -202,7 +227,11 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn require(&self, role: Role) -> Result<(), Failure> {
-        if self.role >= role { Ok(()) } else { Err(Failure::forbidden()) }
+        if self.role >= role {
+            Ok(())
+        } else {
+            Err(Failure::forbidden())
+        }
     }
 
     pub fn href(&self, path: &str) -> String {
@@ -230,6 +259,7 @@ pub struct Shell {
     codes: Held<oauth::Code>,
     hooks: Arc<Vec<PathBuf>>,
     logins: Arc<Limiter>,
+    live: tokio::sync::broadcast::Sender<(i64, String)>,
 }
 
 type Held<T> = Arc<Mutex<HashMap<String, (T, i64)>>>;
@@ -239,14 +269,19 @@ const PENDING_TTL: i64 = 300;
 fn hold<T>(map: &Mutex<HashMap<String, (T, i64)>>, value: T) -> String {
     let key = secret();
     let now = now();
-    let mut map = map.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut map = map
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     map.retain(|_, (_, expires)| *expires > now);
     map.insert(key.clone(), (value, now + PENDING_TTL));
     key
 }
 
 fn take<T>(map: &Mutex<HashMap<String, (T, i64)>>, key: &str) -> Option<T> {
-    let (value, expires) = map.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(key)?;
+    let (value, expires) = map
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(key)?;
     (expires > now()).then_some(value)
 }
 const HOOK_TIMEOUT: Duration = Duration::from_secs(120);
@@ -255,10 +290,21 @@ impl Shell {
     pub fn open(data: &Path, url: &str, hooks: Vec<PathBuf>) -> Result<Self, String> {
         let url = url.trim_end_matches('/');
         if !(url.starts_with("https://") || url.starts_with("http://")) {
-            return Err(format!("the url must start with http:// or https://: {url}"));
+            return Err(format!(
+                "the url must start with http:// or https://: {url}"
+            ));
         }
-        let db = Db::open(&data.join("chi.db"), include_str!("schema.sql")).map_err(|e| e.to_string())?;
-        add_repo_kind(&db.0.lock().expect("nothing else holds the connection yet")).map_err(|e| e.to_string())?;
+        let db = Db::open(&data.join("chi.db"), include_str!("schema.sql"))
+            .map_err(|e| e.to_string())?;
+        {
+            let conn = db.0.lock().expect("nothing else holds the connection yet");
+            add_column(&conn, "repos", "kind", "TEXT NOT NULL DEFAULT ''")
+                .map_err(|e| e.to_string())?;
+            add_column(&conn, "repos", "pipeline", "TEXT NOT NULL DEFAULT ''")
+                .map_err(|e| e.to_string())?;
+            add_column(&conn, "users", "kind", "TEXT NOT NULL DEFAULT 'human'")
+                .map_err(|e| e.to_string())?;
+        }
         Ok(Self {
             db,
             url: url.into(),
@@ -266,7 +312,34 @@ impl Shell {
             codes: Arc::default(),
             hooks: Arc::new(hooks),
             logins: Arc::new(Limiter::new(0.05, 10.0)),
+            live: tokio::sync::broadcast::channel(256).0,
         })
+    }
+
+    pub fn publish(&self, org_id: i64, topic: &str) {
+        let _ = self.live.send((org_id, topic.to_owned()));
+    }
+
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<(i64, String)> {
+        self.live.subscribe()
+    }
+
+    pub async fn agent(&self, name: &str) -> Result<i64, Failure> {
+        let email = format!("{name}@agents");
+        self.db
+            .call(move |conn| store::ensure_user(conn, &email, "agent"))
+            .await
+    }
+
+    pub async fn ensure_user(&self, email: &str) -> Result<i64, Failure> {
+        let email = email.trim().to_lowercase();
+        self.db
+            .call(move |conn| store::ensure_user(conn, &email, "human"))
+            .await
+    }
+
+    pub async fn people(&self, org_id: i64) -> Result<Vec<Person>, Failure> {
+        self.db.call(move |conn| store::people(conn, org_id)).await
     }
 
     pub fn url(&self, path: &str) -> String {
@@ -286,17 +359,37 @@ impl Shell {
     }
 
     pub async fn repo(&self, org_id: i64, id: i64) -> Result<Option<Repo>, Failure> {
-        Ok(self.repos(org_id).await?.into_iter().find(|repo| repo.id == id))
+        Ok(self
+            .repos(org_id)
+            .await?
+            .into_iter()
+            .find(|repo| repo.id == id))
+    }
+
+    pub async fn repos_by_url(&self, url: &str) -> Result<Vec<Repo>, Failure> {
+        let wanted = same_repo(url);
+        Ok(self
+            .db
+            .call(|conn| store::all_repos(conn))
+            .await?
+            .into_iter()
+            .filter(|repo| same_repo(&repo.url) == wanted)
+            .collect())
     }
 
     pub async fn repo_by_token(&self, token: &str) -> Result<Option<Repo>, Failure> {
         let hash = sha256_hex(token.as_bytes());
-        self.db.call(move |conn| store::repo_by_token(conn, &hash)).await
+        self.db
+            .call(move |conn| store::repo_by_token(conn, &hash))
+            .await
     }
 
     pub async fn org_address(&self, org_id: i64) -> Result<Option<(String, String)>, Failure> {
         let org = self.db.call(move |conn| store::org(conn, org_id)).await?;
-        Ok(org.map(|org| { let home = self.url(&format!("/{}", org.slug)); (org.slug, home) }))
+        Ok(org.map(|org| {
+            let home = self.url(&format!("/{}", org.slug));
+            (org.slug, home)
+        }))
     }
 
     pub async fn bootstrap(&self) -> Result<(), Failure> {
@@ -314,7 +407,10 @@ impl Shell {
             })
             .await?;
         if needed {
-            println!("no suite admin yet, create one at: {}", self.url(&format!("/invite/{token}")));
+            println!(
+                "no suite admin yet, create one at: {}",
+                self.url(&format!("/invite/{token}"))
+            );
         }
         Ok(())
     }
@@ -323,7 +419,9 @@ impl Shell {
         let payload = event.to_string();
         let mut results = Vec::new();
         for hook in self.hooks.iter() {
-            let name = hook.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+            let name = hook
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
             let outcome = tokio::time::timeout(HOOK_TIMEOUT, run_hook(hook, &payload)).await;
             let (ok, output) = match outcome {
                 Ok(Ok((ok, output))) => (ok, output),
@@ -333,17 +431,45 @@ impl Shell {
             if !ok {
                 eprintln!("hook {name} failed: {output}");
             }
-            results.push(HookResult { hook: name, ok, output });
+            results.push(HookResult {
+                hook: name,
+                ok,
+                output,
+            });
         }
         results
     }
 }
 
-fn add_repo_kind(conn: &Connection) -> rusqlite::Result<()> {
-    let present: bool =
-        conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('repos') WHERE name = 'kind')", [], |row| row.get(0))?;
+pub fn same_repo(url: &str) -> String {
+    let url = url.trim().to_lowercase();
+    let url = url.split_once("://").map_or(url.as_str(), |(_, rest)| rest);
+    let url = url
+        .strip_prefix("git@")
+        .map_or_else(|| url.to_owned(), |rest| rest.replacen(':', "/", 1));
+    let url = url.rsplit_once('@').map_or(url.as_str(), |(_, host)| host);
+    url.trim_end_matches('/')
+        .trim_end_matches(".git")
+        .trim_end_matches('/')
+        .to_owned()
+}
+
+pub fn add_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    declaration: &str,
+) -> rusqlite::Result<()> {
+    let present: bool = conn.query_row(
+        &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1)"),
+        [column],
+        |row| row.get(0),
+    )?;
     if !present {
-        conn.execute("ALTER TABLE repos ADD COLUMN kind TEXT NOT NULL DEFAULT ''", [])?;
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {declaration}"),
+            [],
+        )?;
     }
     Ok(())
 }
@@ -368,28 +494,46 @@ async fn run_hook(hook: &Path, payload: &str) -> std::io::Result<(bool, String)>
         stdin.write_all(payload.as_bytes()).await?;
     }
     let output = child.wait_with_output().await?;
-    let text = if output.status.success() { output.stdout } else { output.stderr };
-    let text: String = String::from_utf8_lossy(&text).trim().chars().take(500).collect();
+    let text = if output.status.success() {
+        output.stdout
+    } else {
+        output.stderr
+    };
+    let text: String = String::from_utf8_lossy(&text)
+        .trim()
+        .chars()
+        .take(500)
+        .collect();
     Ok((output.status.success(), text))
 }
 
 pub fn set_password(data: &Path, email: &str, password: &str) -> Result<(), String> {
     if password.len() < web::MIN_PASSWORD {
-        return Err(format!("the password needs {}+ characters", web::MIN_PASSWORD));
+        return Err(format!(
+            "the password needs {}+ characters",
+            web::MIN_PASSWORD
+        ));
     }
     let email = email.trim().to_lowercase();
     let hash = web::hash_password(password).map_err(|failure| failure.1)?;
     let conn = Connection::open(data.join("chi.db")).map_err(|e| e.to_string())?;
-    conn.busy_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
     let changed = conn
-        .execute("UPDATE users SET password_hash = ?1 WHERE email = ?2", (&hash, &email))
+        .execute(
+            "UPDATE users SET password_hash = ?1 WHERE email = ?2",
+            (&hash, &email),
+        )
         .map_err(|e| e.to_string())?;
     if changed == 0 {
         return Err(format!("no user {email}"));
     }
     for table in ["sessions", "grants"] {
-        conn.execute(&format!("DELETE FROM {table} WHERE user_id = (SELECT id FROM users WHERE email = ?1)"), [&email])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            &format!("DELETE FROM {table} WHERE user_id = (SELECT id FROM users WHERE email = ?1)"),
+            [&email],
+        )
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -415,21 +559,42 @@ mod tests {
         assert!(set_password(&data, "nobody@b.c", "long enough password").is_err());
         set_password(&data, " A@B.c ", "long enough password").unwrap();
 
-        let hash: String = conn.query_row("SELECT password_hash FROM users WHERE id = 1", [], |row| row.get(0)).unwrap();
+        let hash: String = conn
+            .query_row("SELECT password_hash FROM users WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
         assert!(web::password_matches("long enough password", &hash));
-        let sessions: i64 = conn.query_row("SELECT count(*) FROM sessions", [], |row| row.get(0)).unwrap();
+        let sessions: i64 = conn
+            .query_row("SELECT count(*) FROM sessions", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(sessions, 0);
         std::fs::remove_dir_all(&data).unwrap();
     }
 
     #[test]
-    fn repo_kind_is_added_to_an_old_database_once() {
+    fn a_column_is_added_to_an_old_database_once() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE repos (id INTEGER PRIMARY KEY, name TEXT NOT NULL); INSERT INTO repos VALUES (1, 'a');").unwrap();
-        add_repo_kind(&conn).unwrap();
-        add_repo_kind(&conn).unwrap();
-        let kind: String = conn.query_row("SELECT kind FROM repos", [], |row| row.get(0)).unwrap();
+        add_column(&conn, "repos", "kind", "TEXT NOT NULL DEFAULT ''").unwrap();
+        add_column(&conn, "repos", "kind", "TEXT NOT NULL DEFAULT ''").unwrap();
+        let kind: String = conn
+            .query_row("SELECT kind FROM repos", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(kind, "");
+    }
+
+    #[test]
+    fn repo_urls_compare_however_spelled() {
+        let want = "github.com/a/b";
+        for url in [
+            "https://github.com/a/b.git",
+            "git@github.com:a/b",
+            "github.com/A/B/",
+            "https://token@github.com/a/b",
+        ] {
+            assert_eq!(same_repo(url), want, "{url}");
+        }
     }
 
     #[test]
@@ -459,7 +624,10 @@ mod tests {
     #[test]
     fn roles_order_by_power() {
         assert!(Role::Owner > Role::Maintainer && Role::Maintainer > Role::Viewer);
-        assert_eq!(Role::parse(Role::Maintainer.as_str()), Some(Role::Maintainer));
+        assert_eq!(
+            Role::parse(Role::Maintainer.as_str()),
+            Some(Role::Maintainer)
+        );
         assert_eq!(Role::parse("admin"), None);
     }
 }

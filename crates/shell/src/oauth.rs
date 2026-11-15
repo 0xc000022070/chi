@@ -29,9 +29,18 @@ pub struct Code {
 
 pub fn routes() -> Router<Shell> {
     Router::new()
-        .route("/.well-known/oauth-authorization-server", get(server_metadata))
-        .route("/.well-known/oauth-protected-resource", get(resource_metadata))
-        .route("/.well-known/oauth-protected-resource/mcp", get(resource_metadata))
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(server_metadata),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(resource_metadata),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource/mcp",
+            get(resource_metadata),
+        )
         .route("/register", post(register))
         .route("/authorize", get(authorize_page).post(authorize))
         .route("/token", post(token))
@@ -59,7 +68,12 @@ async fn resource_metadata(State(shell): State<Shell>) -> Json<Value> {
 }
 
 fn redirect_allowed(uri: &str) -> bool {
-    let loopback = ["http://localhost:", "http://localhost/", "http://127.0.0.1:", "http://127.0.0.1/"];
+    let loopback = [
+        "http://localhost:",
+        "http://localhost/",
+        "http://127.0.0.1:",
+        "http://127.0.0.1/",
+    ];
     uri.len() <= 500
         && !uri.contains('#')
         && !uri.chars().any(char::is_whitespace)
@@ -79,11 +93,21 @@ async fn register(
     headers: HeaderMap,
     Json(form): Json<Registration>,
 ) -> Response {
-    if !shell.logins.allow(&format!("register {}", client_ip(&headers))) {
-        return Failure::new(StatusCode::TOO_MANY_REQUESTS, "too many registrations, wait a few minutes").into_response();
+    if !shell
+        .logins
+        .allow(&format!("register {}", client_ip(&headers)))
+    {
+        return Failure::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many registrations, wait a few minutes",
+        )
+        .into_response();
     }
     let uris = form.redirect_uris;
-    if uris.is_empty() || uris.len() > MAX_REDIRECT_URIS || !uris.iter().all(|uri| redirect_allowed(uri)) {
+    if uris.is_empty()
+        || uris.len() > MAX_REDIRECT_URIS
+        || !uris.iter().all(|uri| redirect_allowed(uri))
+    {
         return oauth_error("invalid_redirect_uri");
     }
     let name: String = match form.client_name.trim() {
@@ -92,7 +116,11 @@ async fn register(
     };
     let id = secret();
     let (row_id, row_name, row_uris) = (id.clone(), name.clone(), uris.clone());
-    if let Err(failure) = shell.db.call(move |conn| store::create_client(conn, &row_id, &row_name, &row_uris)).await {
+    if let Err(failure) = shell
+        .db
+        .call(move |conn| store::create_client(conn, &row_id, &row_name, &row_uris))
+        .await
+    {
         return failure.into_response();
     }
     (
@@ -136,17 +164,32 @@ impl AuthRequest {
             .await?
             .ok_or_else(|| Failure::bad_request("unknown client, connect it again"))?;
         if !uris.contains(&self.redirect_uri) {
-            return Err(Failure::bad_request("redirect_uri is not registered for this client"));
+            return Err(Failure::bad_request(
+                "redirect_uri is not registered for this client",
+            ));
         }
-        if self.response_type != "code" || self.code_challenge_method != "S256" || self.code_challenge.is_empty() {
-            return Err(Failure::bad_request("only the code flow with S256 PKCE is supported"));
+        if self.response_type != "code"
+            || self.code_challenge_method != "S256"
+            || self.code_challenge.is_empty()
+        {
+            return Err(Failure::bad_request(
+                "only the code flow with S256 PKCE is supported",
+            ));
         }
         Ok(name)
     }
 
     fn back(&self, outcome: &str) -> Redirect {
-        let join = if self.redirect_uri.contains('?') { '&' } else { '?' };
-        Redirect::to(&format!("{}{join}{outcome}&state={}", self.redirect_uri, url_encode(&self.state)))
+        let join = if self.redirect_uri.contains('?') {
+            '&'
+        } else {
+            '?'
+        };
+        Redirect::to(&format!(
+            "{}{join}{outcome}&state={}",
+            self.redirect_uri,
+            url_encode(&self.state)
+        ))
     }
 }
 
@@ -164,15 +207,17 @@ async fn authorize_page(
     let name = request.checked(&shell).await?;
     let Some(user) = visit.user else {
         let here = uri.path_and_query().map_or("/", |pq| pq.as_str());
-        return Ok(Redirect::to(&format!("/login?next={}", url_encode(local_path(here)))).into_response());
+        return Ok(
+            Redirect::to(&format!("/login?next={}", url_encode(local_path(here)))).into_response(),
+        );
     };
     let page = hub_page(
         "connect",
         true,
         html! {
             h1 { "Connect " (name) }
-            p { (name) " wants to read the issues, builds and orgs you can see as " b { (user.email) } "." }
-            p.dim { "You will be sent back to " (host(&request.redirect_uri)) ". It cannot change anything." }
+            p { (name) " wants to act as " b { (user.email) } " in the orgs you can reach: read issues, errors, builds and docs, and change them with your role." }
+            p.dim { "You will be sent back to " (host(&request.redirect_uri)) ". Viewers stay read-only." }
             form.stack method="post" action="/authorize" {
                 input type="hidden" name="response_type" value=(request.response_type);
                 input type="hidden" name="client_id" value=(request.client_id);
@@ -187,7 +232,14 @@ async fn authorize_page(
             }
         },
     );
-    Ok(([(header::X_FRAME_OPTIONS, "DENY"), (header::CONTENT_SECURITY_POLICY, "frame-ancestors 'none'")], page).into_response())
+    Ok((
+        [
+            (header::X_FRAME_OPTIONS, "DENY"),
+            (header::CONTENT_SECURITY_POLICY, "frame-ancestors 'none'"),
+        ],
+        page,
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]
@@ -204,7 +256,9 @@ async fn authorize(
     Form(Decision { request, decision }): Form<Decision>,
 ) -> Result<Redirect, Failure> {
     request.checked(&shell).await?;
-    let Some(user) = visit.user else { return Err(Failure::new(StatusCode::UNAUTHORIZED, "sign in first")) };
+    let Some(user) = visit.user else {
+        return Err(Failure::new(StatusCode::UNAUTHORIZED, "sign in first"));
+    };
     if decision != "allow" {
         return Ok(request.back("error=access_denied"));
     }
@@ -236,7 +290,12 @@ struct TokenRequest {
 }
 
 fn oauth_error(error: &str) -> Response {
-    (StatusCode::BAD_REQUEST, [(header::CACHE_CONTROL, "no-store")], Json(json!({ "error": error }))).into_response()
+    (
+        StatusCode::BAD_REQUEST,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({ "error": error })),
+    )
+        .into_response()
 }
 
 async fn token(State(shell): State<Shell>, Form(form): Form<TokenRequest>) -> Response {
@@ -244,18 +303,31 @@ async fn token(State(shell): State<Shell>, Form(form): Form<TokenRequest>) -> Re
         return oauth_error("unsupported_grant_type");
     }
     let Some(code) = take(&shell.codes, &form.code).filter(|code| {
-            code.client_id == form.client_id
-                && code.redirect_uri == form.redirect_uri
-                && sso::challenge(&form.code_verifier) == code.challenge
+        code.client_id == form.client_id
+            && code.redirect_uri == form.redirect_uri
+            && sso::challenge(&form.code_verifier) == code.challenge
     }) else {
         return oauth_error("invalid_grant");
     };
     let access = secret();
     let hash = sha256_hex(access.as_bytes());
-    let ttl = if code.provider_id.is_some() { EXTERNAL_SESSION_TTL } else { SESSION_TTL };
+    let ttl = if code.provider_id.is_some() {
+        EXTERNAL_SESSION_TTL
+    } else {
+        SESSION_TTL
+    };
     let granted = shell
         .db
-        .call(move |conn| store::create_grant(conn, &hash, code.user_id, code.provider_id, &code.client_id, now() + ttl))
+        .call(move |conn| {
+            store::create_grant(
+                conn,
+                &hash,
+                code.user_id,
+                code.provider_id,
+                &code.client_id,
+                now() + ttl,
+            )
+        })
         .await;
     if let Err(failure) = granted {
         return failure.into_response();
@@ -279,7 +351,9 @@ pub async fn bearer(State(shell): State<Shell>, mut req: Request, next: Next) ->
             shell
                 .db
                 .call(move |conn| {
-                    let Some(user) = store::grant(conn, &hash, now())? else { return Ok(None) };
+                    let Some(user) = store::grant(conn, &hash, now())? else {
+                        return Ok(None);
+                    };
                     Ok(Some((store::orgs_of(conn, &user)?, user)))
                 })
                 .await
@@ -293,7 +367,12 @@ pub async fn bearer(State(shell): State<Shell>, mut req: Request, next: Next) ->
                 "Bearer resource_metadata=\"{}\"",
                 shell.url("/.well-known/oauth-protected-resource/mcp")
             );
-            return (StatusCode::UNAUTHORIZED, [(header::WWW_AUTHENTICATE, challenge)], "sign in required").into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(header::WWW_AUTHENTICATE, challenge)],
+                "sign in required",
+            )
+                .into_response();
         }
         Err(failure) => return failure.into_response(),
     };

@@ -16,6 +16,20 @@ pub struct Repo {
     pub name: String,
     pub url: String,
     pub kind: String,
+    pub pipeline: String,
+}
+
+#[derive(Clone)]
+pub struct Person {
+    pub id: i64,
+    pub email: String,
+    pub agent: bool,
+}
+
+impl Person {
+    pub fn handle(&self) -> &str {
+        self.email.split('@').next().unwrap_or(&self.email)
+    }
 }
 
 pub struct Provider {
@@ -35,23 +49,43 @@ pub struct SessionUser {
 }
 
 fn org_row(row: &rusqlite::Row) -> Result<Org> {
-    Ok(Org { id: row.get(0)?, slug: row.get(1)?, name: row.get(2)? })
+    Ok(Org {
+        id: row.get(0)?,
+        slug: row.get(1)?,
+        name: row.get(2)?,
+    })
 }
 
 pub fn org_by_slug(conn: &Connection, slug: &str) -> Result<Option<Org>> {
-    conn.query_row("SELECT id, slug, name FROM orgs WHERE slug = ?1", [slug], org_row).optional()
+    conn.query_row(
+        "SELECT id, slug, name FROM orgs WHERE slug = ?1",
+        [slug],
+        org_row,
+    )
+    .optional()
 }
 
 pub fn org(conn: &Connection, org_id: i64) -> Result<Option<Org>> {
-    conn.query_row("SELECT id, slug, name FROM orgs WHERE id = ?1", [org_id], org_row).optional()
+    conn.query_row(
+        "SELECT id, slug, name FROM orgs WHERE id = ?1",
+        [org_id],
+        org_row,
+    )
+    .optional()
 }
 
 pub fn orgs(conn: &Connection) -> Result<Vec<Org>> {
-    conn.prepare("SELECT id, slug, name FROM orgs ORDER BY name")?.query_map([], org_row)?.collect()
+    conn.prepare("SELECT id, slug, name FROM orgs ORDER BY name")?
+        .query_map([], org_row)?
+        .collect()
 }
 
 pub fn has_admin(conn: &Connection) -> Result<bool> {
-    conn.query_row("SELECT EXISTS(SELECT 1 FROM users WHERE admin = 1)", [], |row| row.get(0))
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE admin = 1)",
+        [],
+        |row| row.get(0),
+    )
 }
 
 pub fn session(conn: &Connection, token_hash: &str, now: i64) -> Result<Option<SessionUser>> {
@@ -62,7 +96,12 @@ pub fn grant(conn: &Connection, token_hash: &str, now: i64) -> Result<Option<Ses
     holder(conn, "grants", token_hash, now)
 }
 
-fn holder(conn: &Connection, table: &str, token_hash: &str, now: i64) -> Result<Option<SessionUser>> {
+fn holder(
+    conn: &Connection,
+    table: &str,
+    token_hash: &str,
+    now: i64,
+) -> Result<Option<SessionUser>> {
     let row = conn
         .query_row(
             &format!(
@@ -84,14 +123,21 @@ fn holder(conn: &Connection, table: &str, token_hash: &str, now: i64) -> Result<
             },
         )
         .optional()?;
-    Ok(row.and_then(|(user_id, email, admin, provider_id, org_id, trusted)| {
-        let provider = match (provider_id, org_id, trusted) {
-            (None, ..) => None,
-            (Some(id), Some(org_id), Some(trusted)) => Some((id, org_id, trusted)),
-            (Some(_), ..) => return None,
-        };
-        Some(SessionUser { user_id, email, admin, provider })
-    }))
+    Ok(
+        row.and_then(|(user_id, email, admin, provider_id, org_id, trusted)| {
+            let provider = match (provider_id, org_id, trusted) {
+                (None, ..) => None,
+                (Some(id), Some(org_id), Some(trusted)) => Some((id, org_id, trusted)),
+                (Some(_), ..) => return None,
+            };
+            Some(SessionUser {
+                user_id,
+                email,
+                admin,
+                provider,
+            })
+        }),
+    )
 }
 
 /// The role a session actually carries inside `org_id`. An external sign-in only
@@ -109,7 +155,9 @@ pub fn role_in(conn: &Connection, user: &SessionUser, org_id: i64) -> Result<Opt
     };
     match user.provider {
         Some((_, provider_org, _)) if provider_org != org_id => Ok(None),
-        Some((_, _, trusted)) => Ok(membership()?.map(|role| if trusted { role } else { Role::Viewer })),
+        Some((_, _, trusted)) => {
+            Ok(membership()?.map(|role| if trusted { role } else { Role::Viewer }))
+        }
         None if user.admin => Ok(Some(Role::Owner)),
         None => membership(),
     }
@@ -156,7 +204,12 @@ pub fn create_grant(
     Ok(())
 }
 
-pub fn create_client(conn: &Connection, id: &str, name: &str, redirect_uris: &[String]) -> Result<()> {
+pub fn create_client(
+    conn: &Connection,
+    id: &str,
+    name: &str,
+    redirect_uris: &[String],
+) -> Result<()> {
     conn.execute(
         "INSERT INTO clients (id, name, redirect_uris, created_at) VALUES (?1, ?2, ?3, ?4)",
         (id, name, redirect_uris.join("\n"), crate::now()),
@@ -165,14 +218,24 @@ pub fn create_client(conn: &Connection, id: &str, name: &str, redirect_uris: &[S
 }
 
 pub fn client(conn: &Connection, id: &str) -> Result<Option<(String, Vec<String>)>> {
-    conn.query_row("SELECT name, redirect_uris FROM clients WHERE id = ?1", [id], |row| {
-        let uris: String = row.get(1)?;
-        Ok((row.get(0)?, uris.lines().map(str::to_owned).collect()))
-    })
+    conn.query_row(
+        "SELECT name, redirect_uris FROM clients WHERE id = ?1",
+        [id],
+        |row| {
+            let uris: String = row.get(1)?;
+            Ok((row.get(0)?, uris.lines().map(str::to_owned).collect()))
+        },
+    )
     .optional()
 }
 
-pub fn create_invite(conn: &Connection, token_hash: &str, org_id: Option<i64>, role: Role, expires_at: i64) -> Result<()> {
+pub fn create_invite(
+    conn: &Connection,
+    token_hash: &str,
+    org_id: Option<i64>,
+    role: Role,
+    expires_at: i64,
+) -> Result<()> {
     conn.execute(
         "INSERT INTO invites (token_hash, org_id, role, expires_at) VALUES (?1, ?2, ?3, ?4)",
         (token_hash, org_id, role.as_str(), expires_at),
@@ -195,21 +258,72 @@ pub fn providers(conn: &Connection) -> Result<Vec<Provider>> {
 }
 
 fn repo_row(row: &rusqlite::Row) -> Result<Repo> {
-    Ok(Repo { id: row.get(0)?, org_id: row.get(1)?, name: row.get(2)?, url: row.get(3)?, kind: row.get(4)? })
+    Ok(Repo {
+        id: row.get(0)?,
+        org_id: row.get(1)?,
+        name: row.get(2)?,
+        url: row.get(3)?,
+        kind: row.get(4)?,
+        pipeline: row.get(5)?,
+    })
 }
 
 pub fn repos(conn: &Connection, org_id: i64) -> Result<Vec<Repo>> {
-    conn.prepare("SELECT id, org_id, name, url, kind FROM repos WHERE org_id = ?1 ORDER BY name")?
-        .query_map([org_id], repo_row)?
+    conn.prepare(
+        "SELECT id, org_id, name, url, kind, pipeline FROM repos WHERE org_id = ?1 ORDER BY name",
+    )?
+    .query_map([org_id], repo_row)?
+    .collect()
+}
+
+pub fn all_repos(conn: &Connection) -> Result<Vec<Repo>> {
+    conn.prepare("SELECT id, org_id, name, url, kind, pipeline FROM repos")?
+        .query_map([], repo_row)?
         .collect()
 }
 
 pub fn repo_by_token(conn: &Connection, token_hash: &str) -> Result<Option<Repo>> {
-    conn.query_row("SELECT id, org_id, name, url, kind FROM repos WHERE token_hash = ?1", [token_hash], repo_row)
-        .optional()
+    conn.query_row(
+        "SELECT id, org_id, name, url, kind, pipeline FROM repos WHERE token_hash = ?1",
+        [token_hash],
+        repo_row,
+    )
+    .optional()
 }
 
-pub fn sign_in_external(conn: &mut Connection, provider_id: i64, org_id: i64, subject: &str, email: &str) -> Result<i64> {
+pub fn ensure_user(conn: &Connection, email: &str, kind: &str) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO users (email, kind, created_at) VALUES (?1, ?2, ?3) ON CONFLICT (email) DO NOTHING",
+        (email, kind, crate::now()),
+    )?;
+    conn.query_row("SELECT id FROM users WHERE email = ?1", [email], |row| {
+        row.get(0)
+    })
+}
+
+pub fn people(conn: &Connection, org_id: i64) -> Result<Vec<Person>> {
+    conn.prepare(
+        "SELECT id, email, kind = 'agent' FROM users
+         WHERE kind = 'agent' OR id IN (SELECT user_id FROM memberships WHERE org_id = ?1)
+         ORDER BY kind = 'agent', email",
+    )?
+    .query_map([org_id], |row| {
+        Ok(Person {
+            id: row.get(0)?,
+            email: row.get(1)?,
+            agent: row.get(2)?,
+        })
+    })?
+    .collect()
+}
+
+pub fn sign_in_external(
+    conn: &mut Connection,
+    provider_id: i64,
+    org_id: i64,
+    subject: &str,
+    email: &str,
+) -> Result<i64> {
     let tx = conn.transaction()?;
     let known: Option<i64> = tx
         .query_row(
@@ -225,7 +339,10 @@ pub fn sign_in_external(conn: &mut Connection, provider_id: i64, org_id: i64, su
                 "INSERT INTO users (email, created_at) VALUES (?1, ?2) ON CONFLICT (email) DO NOTHING",
                 (email, crate::now()),
             )?;
-            let user_id: i64 = tx.query_row("SELECT id FROM users WHERE email = ?1", [email], |row| row.get(0))?;
+            let user_id: i64 =
+                tx.query_row("SELECT id FROM users WHERE email = ?1", [email], |row| {
+                    row.get(0)
+                })?;
             tx.execute(
                 "INSERT INTO identities (provider_id, subject, user_id) VALUES (?1, ?2, ?3)",
                 (provider_id, subject, user_id),
@@ -239,60 +356,6 @@ pub fn sign_in_external(conn: &mut Connection, provider_id: i64, org_id: i64, su
     )?;
     tx.commit()?;
     Ok(user_id)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(include_str!("schema.sql")).unwrap();
-        conn.execute_batch(
-            "INSERT INTO orgs (id, slug, name) VALUES (1, 'a', 'A'), (2, 'b', 'B');
-             INSERT INTO users (id, email, admin, created_at) VALUES (1, 'root@x', 1, 0), (2, 'dev@x', 0, 0);
-             INSERT INTO memberships VALUES (2, 1, 'owner'), (2, 2, 'maintainer');
-             INSERT INTO providers (id, org_id, name, issuer, client_id, trusted) VALUES (1, 1, 'prod', '', '', 1), (2, 1, 'staging', '', '', 0);",
-        )
-        .unwrap();
-        conn
-    }
-
-    fn user(user_id: i64, admin: bool, provider: Option<(i64, i64, bool)>) -> SessionUser {
-        SessionUser { user_id, email: String::new(), admin, provider }
-    }
-
-    #[test]
-    fn external_sign_in_stays_in_its_org_and_untrusted_is_capped() {
-        let conn = seeded();
-        assert_eq!(role_in(&conn, &user(2, false, None), 1).unwrap(), Some(Role::Owner));
-        assert_eq!(role_in(&conn, &user(2, false, Some((1, 1, true))), 1).unwrap(), Some(Role::Owner));
-        assert_eq!(role_in(&conn, &user(2, false, Some((2, 1, false))), 1).unwrap(), Some(Role::Viewer));
-        assert_eq!(role_in(&conn, &user(2, false, Some((1, 1, true))), 2).unwrap(), None);
-        assert_eq!(role_in(&conn, &user(1, true, None), 2).unwrap(), Some(Role::Owner));
-        assert_eq!(role_in(&conn, &user(1, true, Some((1, 1, true))), 2).unwrap(), None);
-        assert_eq!(role_in(&conn, &user(1, true, Some((1, 1, true))), 1).unwrap(), None);
-    }
-
-    #[test]
-    fn session_from_a_removed_provider_is_dead() {
-        let conn = seeded();
-        create_session(&conn, "h", 2, Some(2), i64::MAX).unwrap();
-        assert!(session(&conn, "h", 0).unwrap().is_some());
-        conn.execute_batch("PRAGMA foreign_keys = OFF; DELETE FROM providers WHERE id = 2;").unwrap();
-        assert!(session(&conn, "h", 0).unwrap().is_none());
-    }
-
-    #[test]
-    fn external_sign_in_links_by_email_and_adds_a_viewer_membership() {
-        let mut conn = seeded();
-        let existing = sign_in_external(&mut conn, 1, 1, "sub-1", "dev@x").unwrap();
-        assert_eq!(existing, 2);
-        assert_eq!(role_in(&conn, &user(2, false, None), 1).unwrap(), Some(Role::Owner));
-        let fresh = sign_in_external(&mut conn, 1, 1, "sub-2", "new@x").unwrap();
-        assert_eq!(sign_in_external(&mut conn, 1, 1, "sub-2", "renamed@x").unwrap(), fresh);
-        assert_eq!(role_in(&conn, &user(fresh, false, None), 1).unwrap(), Some(Role::Viewer));
-    }
 }
 
 pub struct Member {
@@ -309,13 +372,18 @@ pub enum Joined {
 
 pub enum Joiner {
     Existing(i64),
-    New { email: String, password_hash: String },
+    New {
+        email: String,
+        password_hash: String,
+    },
 }
 
 pub fn password_hash(conn: &Connection, email: &str) -> Result<Option<(i64, String)>> {
-    conn.query_row("SELECT id, password_hash FROM users WHERE email = ?1 AND password_hash IS NOT NULL", [email], |row| {
-        Ok((row.get(0)?, row.get(1)?))
-    })
+    conn.query_row(
+        "SELECT id, password_hash FROM users WHERE email = ?1 AND password_hash IS NOT NULL",
+        [email],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
     .optional()
 }
 
@@ -332,7 +400,12 @@ pub fn invite_exists(conn: &Connection, token_hash: &str, now: i64) -> Result<bo
     )
 }
 
-pub fn accept_invite(conn: &mut Connection, token_hash: &str, now: i64, joiner: Joiner) -> Result<Joined> {
+pub fn accept_invite(
+    conn: &mut Connection,
+    token_hash: &str,
+    now: i64,
+    joiner: Joiner,
+) -> Result<Joined> {
     let tx = conn.transaction()?;
     let invite: Option<(Option<i64>, String)> = tx
         .query_row(
@@ -341,10 +414,15 @@ pub fn accept_invite(conn: &mut Connection, token_hash: &str, now: i64, joiner: 
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    let Some((org_id, role)) = invite else { return Ok(Joined::BadInvite) };
+    let Some((org_id, role)) = invite else {
+        return Ok(Joined::BadInvite);
+    };
     let user_id = match joiner {
         Joiner::Existing(user_id) => user_id,
-        Joiner::New { email, password_hash } => {
+        Joiner::New {
+            email,
+            password_hash,
+        } => {
             let created = tx.execute(
                 "INSERT INTO users (email, password_hash, created_at) VALUES (?1, ?2, ?3) ON CONFLICT (email) DO NOTHING",
                 (&email, &password_hash, now),
@@ -368,7 +446,10 @@ pub fn accept_invite(conn: &mut Connection, token_hash: &str, now: i64, joiner: 
 }
 
 pub fn create_org(conn: &Connection, slug: &str, name: &str) -> Result<bool> {
-    let created = conn.execute("INSERT INTO orgs (slug, name) VALUES (?1, ?2) ON CONFLICT DO NOTHING", (slug, name))?;
+    let created = conn.execute(
+        "INSERT INTO orgs (slug, name) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
+        (slug, name),
+    )?;
     Ok(created == 1)
 }
 
@@ -386,12 +467,22 @@ pub fn set_role(conn: &Connection, org_id: i64, user_id: i64, role: Option<Role>
             "UPDATE memberships SET role = ?3 WHERE org_id = ?1 AND user_id = ?2",
             (org_id, user_id, role.as_str()),
         )?,
-        None => conn.execute("DELETE FROM memberships WHERE org_id = ?1 AND user_id = ?2", (org_id, user_id))?,
+        None => conn.execute(
+            "DELETE FROM memberships WHERE org_id = ?1 AND user_id = ?2",
+            (org_id, user_id),
+        )?,
     };
     Ok(())
 }
 
-pub fn create_repo(conn: &Connection, org_id: i64, name: &str, url: &str, kind: &str, token_hash: &str) -> Result<bool> {
+pub fn create_repo(
+    conn: &Connection,
+    org_id: i64,
+    name: &str,
+    url: &str,
+    kind: &str,
+    token_hash: &str,
+) -> Result<bool> {
     let created = conn.execute(
         "INSERT INTO repos (org_id, name, url, kind, token_hash) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
         (org_id, name, url, kind, token_hash),
@@ -399,12 +490,27 @@ pub fn create_repo(conn: &Connection, org_id: i64, name: &str, url: &str, kind: 
     Ok(created == 1)
 }
 
-pub fn update_repo(conn: &Connection, org_id: i64, id: i64, url: &str, kind: &str) -> Result<()> {
-    conn.execute("UPDATE repos SET url = ?3, kind = ?4 WHERE org_id = ?1 AND id = ?2", (org_id, id, url, kind))?;
+pub fn update_repo(
+    conn: &Connection,
+    org_id: i64,
+    id: i64,
+    url: &str,
+    kind: &str,
+    pipeline: &str,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE repos SET url = ?3, kind = ?4, pipeline = ?5 WHERE org_id = ?1 AND id = ?2",
+        (org_id, id, url, kind, pipeline),
+    )?;
     Ok(())
 }
 
-pub fn rotate_repo_token(conn: &Connection, org_id: i64, id: i64, token_hash: &str) -> Result<Option<String>> {
+pub fn rotate_repo_token(
+    conn: &Connection,
+    org_id: i64,
+    id: i64,
+    token_hash: &str,
+) -> Result<Option<String>> {
     conn.query_row(
         "UPDATE repos SET token_hash = ?3 WHERE org_id = ?1 AND id = ?2 RETURNING name",
         (org_id, id, token_hash),
@@ -413,7 +519,14 @@ pub fn rotate_repo_token(conn: &Connection, org_id: i64, id: i64, token_hash: &s
     .optional()
 }
 
-pub fn create_provider(conn: &Connection, org_id: i64, name: &str, issuer: &str, client_id: &str, trusted: bool) -> Result<()> {
+pub fn create_provider(
+    conn: &Connection,
+    org_id: i64,
+    name: &str,
+    issuer: &str,
+    client_id: &str,
+    trusted: bool,
+) -> Result<()> {
     conn.execute(
         "INSERT INTO providers (org_id, name, issuer, client_id, trusted) VALUES (?1, ?2, ?3, ?4, ?5)",
         (org_id, name, issuer, client_id, trusted),
@@ -435,4 +548,110 @@ pub fn delete_provider(conn: &mut Connection, org_id: i64, id: i64) -> Result<()
         tx.execute("DELETE FROM providers WHERE id = ?1", [id])?;
     }
     tx.commit()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seeded() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("schema.sql")).unwrap();
+        conn.execute_batch(
+            "INSERT INTO orgs (id, slug, name) VALUES (1, 'a', 'A'), (2, 'b', 'B');
+             INSERT INTO users (id, email, admin, created_at) VALUES (1, 'root@x', 1, 0), (2, 'dev@x', 0, 0);
+             INSERT INTO memberships VALUES (2, 1, 'owner'), (2, 2, 'maintainer');
+             INSERT INTO providers (id, org_id, name, issuer, client_id, trusted) VALUES (1, 1, 'prod', '', '', 1), (2, 1, 'staging', '', '', 0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn user(user_id: i64, admin: bool, provider: Option<(i64, i64, bool)>) -> SessionUser {
+        SessionUser {
+            user_id,
+            email: String::new(),
+            admin,
+            provider,
+        }
+    }
+
+    #[test]
+    fn external_sign_in_stays_in_its_org_and_untrusted_is_capped() {
+        let conn = seeded();
+        assert_eq!(
+            role_in(&conn, &user(2, false, None), 1).unwrap(),
+            Some(Role::Owner)
+        );
+        assert_eq!(
+            role_in(&conn, &user(2, false, Some((1, 1, true))), 1).unwrap(),
+            Some(Role::Owner)
+        );
+        assert_eq!(
+            role_in(&conn, &user(2, false, Some((2, 1, false))), 1).unwrap(),
+            Some(Role::Viewer)
+        );
+        assert_eq!(
+            role_in(&conn, &user(2, false, Some((1, 1, true))), 2).unwrap(),
+            None
+        );
+        assert_eq!(
+            role_in(&conn, &user(1, true, None), 2).unwrap(),
+            Some(Role::Owner)
+        );
+        assert_eq!(
+            role_in(&conn, &user(1, true, Some((1, 1, true))), 2).unwrap(),
+            None
+        );
+        assert_eq!(
+            role_in(&conn, &user(1, true, Some((1, 1, true))), 1).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn session_from_a_removed_provider_is_dead() {
+        let conn = seeded();
+        create_session(&conn, "h", 2, Some(2), i64::MAX).unwrap();
+        assert!(session(&conn, "h", 0).unwrap().is_some());
+        conn.execute_batch("PRAGMA foreign_keys = OFF; DELETE FROM providers WHERE id = 2;")
+            .unwrap();
+        assert!(session(&conn, "h", 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn people_are_the_members_then_every_agent() {
+        let conn = seeded();
+        ensure_user(&conn, "claude@agents", "agent").unwrap();
+        assert_eq!(ensure_user(&conn, "claude@agents", "agent").unwrap(), 3);
+        let names: Vec<_> = people(&conn, 2)
+            .unwrap()
+            .iter()
+            .map(|p| (p.handle().to_owned(), p.agent))
+            .collect();
+        assert_eq!(
+            names,
+            [("dev".to_owned(), false), ("claude".to_owned(), true)]
+        );
+    }
+
+    #[test]
+    fn external_sign_in_links_by_email_and_adds_a_viewer_membership() {
+        let mut conn = seeded();
+        let existing = sign_in_external(&mut conn, 1, 1, "sub-1", "dev@x").unwrap();
+        assert_eq!(existing, 2);
+        assert_eq!(
+            role_in(&conn, &user(2, false, None), 1).unwrap(),
+            Some(Role::Owner)
+        );
+        let fresh = sign_in_external(&mut conn, 1, 1, "sub-2", "new@x").unwrap();
+        assert_eq!(
+            sign_in_external(&mut conn, 1, 1, "sub-2", "renamed@x").unwrap(),
+            fresh
+        );
+        assert_eq!(
+            role_in(&conn, &user(fresh, false, None), 1).unwrap(),
+            Some(Role::Viewer)
+        );
+    }
 }

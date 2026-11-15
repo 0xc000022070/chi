@@ -122,7 +122,29 @@ h2+.dim{margin-top:-4px}
 #get-app span{flex:1}
 #get-app a{font-weight:500;color:var(--link)}
 #get-app button{height:36px;padding:0 12px;border:0;color:var(--muted)}
-@media(max-width:600px){nav{flex-wrap:wrap;height:auto;padding:6px 16px;overflow:visible}nav::after{content:'';order:1;flex-basis:100%}nav>a{order:2;padding:0 12px 0 0}nav>a:hover{background:none}dd:last-child{margin-bottom:0}main{padding-top:24px}h1{font-size:24px}form.stack{max-width:none}form.stack button{width:100%}dl{grid-template-columns:1fr;gap:0}dd{margin-bottom:12px}}
+textarea{display:block;width:100%;min-height:120px;margin-top:4px;padding:12px;font:inherit;font-size:16px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;resize:vertical}
+textarea.code{font:13px/1.6 mono,ui-monospace,monospace}
+.md{overflow-wrap:anywhere}.md img{max-width:100%;border-radius:6px}.md table{border-collapse:collapse}.md td,.md th{border:1px solid var(--line);padding:4px 8px}.md blockquote{margin:0;padding-left:12px;border-left:3px solid var(--line);color:var(--muted)}
+kbd{font:12px mono,ui-monospace,monospace;padding:1px 6px;border:1px solid var(--line);border-radius:4px}
+.board{display:flex;gap:12px;overflow-x:auto;margin:0 -16px;padding:0 16px 16px}
+.board section{flex:0 0 260px;min-height:120px;padding:8px;border-radius:8px;background:var(--surface)}
+.board section.over{outline:2px dashed var(--accent)}
+.board h3{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--muted)}
+.card{display:block;margin-bottom:8px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);text-decoration:none;font-size:14px;cursor:grab}
+.card span{display:block;font-size:12px;color:var(--muted)}
+main:has(.board){max-width:none}
+.split{display:grid;grid-template-columns:1fr 260px;gap:32px}
+.split aside dl{grid-template-columns:1fr;gap:0}.split aside dd{margin-bottom:8px}
+.split aside select,.split aside input{height:36px;width:100%;font-size:14px}
+.p0{color:var(--muted)}.p1{color:var(--bad)}.p2{color:var(--warn)}
+.badge.done,.badge.completed,.badge.ok{color:var(--good);background:var(--good-bg)}
+.badge.in_progress,.badge.in_review,.badge.started,.badge.running,.badge.queued{color:var(--warn);background:var(--warn-bg)}
+.badge.cancelled,.badge.duplicate{text-decoration:line-through}
+.bar{height:6px;border-radius:3px;background:var(--surface);overflow:hidden}.bar i{display:block;height:100%;background:var(--good)}
+#palette{padding:0}#palette input{width:100%;border:0;border-bottom:1px solid var(--line);border-radius:0}
+#palette a{display:block;padding:10px 16px;text-decoration:none}#palette a[aria-selected]{background:var(--surface)}
+#palette div{max-height:50vh;overflow-y:auto}
+@media(max-width:600px){.split{grid-template-columns:1fr}nav{flex-wrap:wrap;height:auto;padding:6px 16px;overflow:visible}nav::after{content:'';order:1;flex-basis:100%}nav>a{order:2;padding:0 12px 0 0}nav>a:hover{background:none}dd:last-child{margin-bottom:0}main{padding-top:24px}h1{font-size:24px}form.stack{max-width:none}form.stack button{width:100%}dl{grid-template-columns:1fr;gap:0}dd{margin-bottom:12px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}.run .track{animation:none}.lane{overflow-x:auto}}
 ";
 
@@ -143,12 +165,35 @@ s.addEventListener('click',e=>{if(Date.now()-skip<800)e.preventDefault()},true);
 s.addEventListener('contextmenu',e=>e.preventDefault());
 let sx,sy;addEventListener('touchstart',e=>{const t=e.touches[0];sx=e.touches.length>1||e.target.closest('pre,input,select,.tabs,#status,dialog')?null:t.clientX;sy=t.clientY},{passive:true});
 addEventListener('touchend',e=>{if(sx==null)return;const t=e.changedTouches[0],dx=t.clientX-sx,dy=t.clientY-sy;sx=null;if(Math.abs(dx)<80||Math.abs(dx)<2*Math.abs(dy))return;const a=[...document.querySelectorAll('.tabs a')],i=a.findIndex(x=>x.hasAttribute('aria-current')),n=i<0?null:a[i+(dx<0?1:-1)];if(n)location=n.href});
-addEventListener('resize',fit);tick();setInterval(tick,10000);document.addEventListener('visibilitychange',tick)"#;
+addEventListener('resize',fit);tick();setInterval(tick,30000);document.addEventListener('visibilitychange',tick);
+let due=false;const busy=()=>document.activeElement?.matches('input,textarea,select')||document.querySelector('dialog[open],details.row[open]');
+function settle(){if(due&&!busy())location.reload()}addEventListener('focusout',()=>setTimeout(settle,300));
+if(window.EventSource){const es=new EventSource('events');es.onmessage=e=>{tick();if(document.querySelector('[data-live~="'+e.data+'"]')){due=true;settle()}}}
+const pal=document.getElementById('palette'),pin=pal.querySelector('input'),plist=pal.querySelector('div');let pseq=0;
+function pick(d){const a=[...plist.children],i=a.findIndex(x=>x.hasAttribute('aria-selected'));a[i]?.removeAttribute('aria-selected');const n=a[(i+d+a.length)%a.length];if(n){n.setAttribute('aria-selected','');n.scrollIntoView({block:'nearest'})}}
+async function find(){const q=pin.value.trim(),n=++pseq;const r=await fetch('search.json?q='+encodeURIComponent(q)).then(r=>r.ok?r.json():[]).catch(()=>[]);if(n!==pseq)return;plist.replaceChildren(...r.map(x=>{const a=document.createElement('a');a.href=x.url;a.textContent=x.title;if(x.hint){const s=document.createElement('span');s.className='dim';s.textContent=' '+x.hint;a.append(s)}return a}));pick(1)}
+pin.addEventListener('input',find);pin.addEventListener('keydown',e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();pick(e.key==='ArrowDown'?1:-1)}else if(e.key==='Enter'){e.preventDefault();const a=plist.querySelector('[aria-selected]');if(a)location=a.href}});
+function palette(){pin.value='';pal.showModal();find()}
+const go={i:'issues',p:'projects',d:'docs',n:'inbox',e:'bugs',b:'builds',a:'agents',s:'settings',m:'issues?q=assignee:me'};let g=0;
+addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();palette();return}
+if(e.metaKey||e.ctrlKey||e.altKey||e.target.closest('input,textarea,select,[contenteditable]')||document.querySelector('dialog[open]'))return;
+if(g&&go[e.key]){location=go[e.key];g=0;return}g=e.key==='g'?Date.now():0;if(g)return;
+const t=document.querySelector('[data-key="'+CSS.escape(e.key)+'"]');if(t){e.preventDefault();t.matches('input,select,textarea')?t.focus():t.click();return}
+if(e.key==='/'){const s=document.querySelector('main input[type=search]');if(s){e.preventDefault();s.focus()}}else if(e.key==='c'){location='issues/new'}else if(e.key==='?'){document.getElementById('keys').showModal()}})"#;
 
-pub const REPO_KINDS: [(&str, &str); 5] = [("backend", ">_"), ("mobile", "[]"), ("web", "<>"), ("library", "{}"), ("cli", "$_")];
+pub const REPO_KINDS: [(&str, &str); 5] = [
+    ("backend", ">_"),
+    ("mobile", "[]"),
+    ("web", "<>"),
+    ("library", "{}"),
+    ("cli", "$_"),
+];
 
 pub fn repo_glyph(kind: &str) -> &'static str {
-    REPO_KINDS.iter().find(|(name, _)| *name == kind).map_or("--", |(_, glyph)| glyph)
+    REPO_KINDS
+        .iter()
+        .find(|(name, _)| *name == kind)
+        .map_or("--", |(_, glyph)| glyph)
 }
 
 pub fn glyph(text: &str) -> Markup {
@@ -193,7 +238,13 @@ fn logout() -> Markup {
 }
 
 pub fn hub_page(title: &str, signed_in: bool, body: Markup) -> Html<String> {
-    frame(title, "/", html! { b { a href="/" { "chi" } } @if signed_in { (logout()) } }, body, html! {})
+    frame(
+        title,
+        "/",
+        html! { b { a href="/" { "chi" } } @if signed_in { (logout()) } },
+        body,
+        html! {},
+    )
 }
 
 pub fn org_page(ctx: &Ctx, title: &str, body: Markup) -> Html<String> {
@@ -202,12 +253,33 @@ pub fn org_page(ctx: &Ctx, title: &str, body: Markup) -> Html<String> {
         &ctx.href("/"),
         html! {
             b { a href="/" { (ctx.org_name) } }
+            a href="issues" { (glyph("[=]")) "issues" }
+            a href="projects" { (glyph("[>]")) "projects" }
+            a href="docs" { (glyph("[/]")) "docs" }
+            a href="inbox" { (glyph("[@]")) "inbox" }
             a href="bugs" { (glyph("[!]")) "bugs" }
             a href="builds" { (glyph("[#]")) "builds" }
+            a href="agents" { (glyph("[*]")) "agents" }
             a href="settings" { (glyph("[~]")) "settings" }
             (logout())
         },
         body,
-        html! { div #tip hidden {} footer #status aria-live="polite" {} script { (PreEscaped(LIVE)) } },
+        html! {
+            div #tip hidden {}
+            footer #status aria-live="polite" {}
+            dialog #palette aria-label="Go to" { form method="dialog" { input type="search" placeholder="Jump to an issue, project, doc or page" aria-label="Search"; } div role="listbox" {} }
+            dialog #keys {
+                h2 { "Keyboard" }
+                dl {
+                    dt { kbd { "Ctrl K" } } dd { "jump anywhere" }
+                    dt { kbd { "c" } } dd { "new issue" }
+                    dt { kbd { "/" } } dd { "search this page" }
+                    dt { kbd { "g" } " then " kbd { "i p d n e b a s m" } } dd { "issues, projects, docs, inbox, errors, builds, agents, settings, my issues" }
+                    dt { kbd { "s p a e" } } dd { "on an issue: status, priority, assignee, edit" }
+                }
+                form method="dialog" { button { "close" } }
+            }
+            script { (PreEscaped(LIVE)) }
+        },
     )
 }

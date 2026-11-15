@@ -118,7 +118,7 @@ impl Bugs {
     }
 
     pub fn ui(&self) -> Router {
-        Router::new().nest("/bugs", ui::routes()).with_state(self.clone())
+        shell::mount("/bugs", ui::routes(), self.clone())
     }
 }
 
