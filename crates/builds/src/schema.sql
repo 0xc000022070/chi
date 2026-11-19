@@ -74,3 +74,27 @@ CREATE TABLE IF NOT EXISTS steps (
   started_at INTEGER,
   finished_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS updates (
+  id INTEGER PRIMARY KEY,
+  repo_id INTEGER NOT NULL,
+  org TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  runtime TEXT NOT NULL,
+  commit_sha TEXT NOT NULL,
+  manifest TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS updates_newest ON updates (org, repo, channel, platform, runtime, id);
+CREATE TABLE IF NOT EXISTS update_assets (
+  sha256 TEXT PRIMARY KEY,
+  size INTEGER NOT NULL,
+  at INTEGER NOT NULL,
+  stored INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS update_files (
+  update_id INTEGER NOT NULL REFERENCES updates(id) ON DELETE CASCADE,
+  sha256 TEXT NOT NULL,
+  PRIMARY KEY (update_id, sha256)
+);

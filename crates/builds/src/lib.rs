@@ -1,6 +1,7 @@
 mod client;
 mod pipeline;
 mod ui;
+mod updates;
 
 use std::{
     collections::HashMap,
@@ -39,6 +40,7 @@ pub struct Builds {
     db: Db,
     shell: Shell,
     dir: Arc<PathBuf>,
+    updates_dir: Arc<PathBuf>,
     uploading: Arc<tokio::sync::Mutex<()>>,
     per_ip: Arc<Limiter>,
     runner: Arc<pipeline::Runner>,
@@ -137,12 +139,15 @@ impl Builds {
     pub fn open(data: &FsPath, shell: Shell, agents: agents::Agents) -> Result<Self, String> {
         let dir = data.join("builds");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let updates_dir = data.join("updates");
+        updates::clear_partial(&updates_dir).map_err(|e| e.to_string())?;
         let db = Db::open(&data.join("builds.db"), include_str!("schema.sql"))
             .map_err(|e| e.to_string())?;
         let builds = Self {
             db,
             shell,
             dir: Arc::new(dir),
+            updates_dir: Arc::new(updates_dir),
             uploading: Arc::default(),
             per_ip: Arc::new(Limiter::new(2.0, 60.0)),
             runner: Arc::new(pipeline::Runner::new(data)),
@@ -169,6 +174,7 @@ impl Builds {
             .route("/api/builds/base", get(base))
             .route("/app.apk", get(app))
             .route("/app.version", get(app_version))
+            .merge(updates::routes())
             .with_state(self.clone())
     }
 
