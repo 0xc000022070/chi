@@ -531,6 +531,7 @@ mod tests {
 
     fn store() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         conn.execute_batch(include_str!("schema.sql")).unwrap();
         conn
     }
