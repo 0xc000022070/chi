@@ -1,4 +1,5 @@
 mod client;
+mod github;
 mod pipeline;
 mod ui;
 mod updates;
@@ -160,6 +161,7 @@ impl Builds {
                 eprintln!("builds: could not fail interrupted pipeline runs: {message}");
             }
         });
+        builds.follow_github();
         Ok(builds)
     }
 
@@ -310,6 +312,20 @@ impl Builds {
                 Ok(())
             })
             .await
+    }
+
+    async fn seal(&self, build: Build, files: Vec<Artifact>) -> Result<(), Failure> {
+        let (id, repo_id, tag) = (build.id, build.repo_id, build.tag);
+        let expired = self
+            .db
+            .call(move |conn| close(conn, id, &files, repo_id, &tag))
+            .await?;
+        for build_id in expired {
+            let _ = tokio::fs::remove_dir_all(self.build_dir(build_id)).await;
+        }
+        self.deliver_in_background(id);
+        self.shell.publish(build.org_id, "builds");
+        Ok(())
     }
 
     fn deliver_in_background(&self, build_id: i64) {
@@ -588,19 +604,11 @@ async fn finish(
     let checked = tokio::task::spawn_blocking(move || verify(&dir, &finish.artifacts)).await??;
     let files = checked.map_err(|message| Failure(StatusCode::UNPROCESSABLE_ENTITY, message))?;
 
-    let (repo_id, tag) = (build.repo_id, build.tag);
-    let expired = builds
-        .db
-        .call(move |conn| close(conn, id, &files, repo_id, &tag))
-        .await?;
-    for build_id in expired {
-        let _ = tokio::fs::remove_dir_all(builds.build_dir(build_id)).await;
-    }
-    builds.deliver_in_background(id);
-    builds.shell.publish(build.org_id, "builds");
+    let org_id = build.org_id;
+    builds.seal(build, files).await?;
     let home = builds
         .shell
-        .org_address(build.org_id)
+        .org_address(org_id)
         .await?
         .map(|(_, home)| home)
         .unwrap_or_default();

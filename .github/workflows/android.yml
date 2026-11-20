@@ -1,0 +1,38 @@
+name: android
+
+on:
+  push:
+    branches: [main]
+    paths: [android/**]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: build
+        env:
+          ANDROID_JKS: ${{ secrets.ANDROID_JKS }}
+          ANDROID_PASS: ${{ secrets.ANDROID_PASS }}
+          CHI_KEYS: ${{ runner.temp }}/keys
+        run: |
+          mkdir -p "$CHI_KEYS"
+          base64 -d <<<"$ANDROID_JKS" > "$CHI_KEYS/android.jks"
+          printf '%s\n' "$ANDROID_PASS" > "$CHI_KEYS/android.pass"
+          android/build.sh
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          code=$(git rev-list --count HEAD)
+          gh release create "v$code" android/out/chi.apk --target "$GITHUB_SHA" --title "chi $code" --notes "$(git log -1 --format=%s)"

@@ -374,11 +374,14 @@ impl Shell {
             .find(|repo| repo.id == id))
     }
 
+    pub async fn all_repos(&self) -> Result<Vec<Repo>, Failure> {
+        self.db.call(|conn| store::all_repos(conn)).await
+    }
+
     pub async fn repos_by_url(&self, url: &str) -> Result<Vec<Repo>, Failure> {
         let wanted = same_repo(url);
         Ok(self
-            .db
-            .call(|conn| store::all_repos(conn))
+            .all_repos()
             .await?
             .into_iter()
             .filter(|repo| same_repo(&repo.url) == wanted)
