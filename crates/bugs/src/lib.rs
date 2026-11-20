@@ -1,5 +1,7 @@
 mod envelope;
 mod ui;
+
+pub use ui::SEARCH_HELP;
 mod writer;
 
 use std::{

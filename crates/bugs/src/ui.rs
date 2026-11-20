@@ -702,3 +702,75 @@ mod tests {
         assert!(source_url(repo, "/workspace/", None, &runtime).is_none());
     }
 }
+
+pub const SEARCH_HELP: &str = "status:open|resolved|ignored is:open|closed|dev level: env: project:, #12 finds error 12";
+
+type Row = (i64, String, String, String, String, String, i64, i64, String);
+
+impl Bugs {
+    async fn rows(&self, org_id: i64, condition: String, mut params: Vec<rusqlite::types::Value>, order: &'static str, limit: i64) -> Result<Vec<shell::Item>, Failure> {
+        params.insert(0, org_id.into());
+        params.push(limit.into());
+        let rows: Vec<Row> = self
+            .db
+            .call(move |conn| {
+                conn.prepare(&format!(
+                    "SELECT i.id, i.title, i.culprit, i.level, i.status, i.environment, i.count, {order}, p.name
+                     FROM issues i JOIN projects p ON p.id = i.project_id WHERE p.org_id = ? AND {condition} ORDER BY 8 DESC LIMIT ?"
+                ))?
+                .query_map(rusqlite::params_from_iter(params), |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?))
+                })?
+                .collect()
+            })
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, title, culprit, level, status, environment, count, at, project)| shell::Item {
+                at,
+                kind: "error",
+                title,
+                url: format!("{BASE}/{id}"),
+                badge: if status == "open" { level } else { status },
+                detail: [project, environment_badge(&environment).unwrap_or("").to_owned(), format!("{count}×"), culprit]
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+            })
+            .collect())
+    }
+
+    pub async fn find(&self, org_id: i64, query: &str, limit: i64) -> Result<Vec<shell::Item>, Failure> {
+        let filter = shell::find::compile(query, "i.last_seen", &["i.title", "i.culprit", "'#' || i.id"], |term, filter| {
+            let lower = || term.lower().into_iter().map(rusqlite::types::Value::from).collect();
+            match term.key.as_str() {
+                "status" => filter.add(term.negated, "i.status IN ({})", lower()),
+                "level" => filter.add(term.negated, "lower(i.level) IN ({})", lower()),
+                "env" => filter.add(term.negated, "lower(i.environment) IN ({})", lower()),
+                "project" => filter.add(term.negated, "lower(p.name) IN ({})", lower()),
+                "is" => {
+                    let sql = match term.lower().first().map(String::as_str) {
+                        Some("open") => "i.status = 'open'",
+                        Some("closed") => "i.status != 'open'",
+                        Some("dev") => IS_DEV,
+                        _ => return Err("is: takes open, closed or dev".to_owned()),
+                    };
+                    filter.add(term.negated, sql, Vec::new());
+                }
+                _ => return Ok(false),
+            }
+            Ok(true)
+        })
+        .map_err(|message| Failure::bad_request(&message))?;
+        self.rows(org_id, filter.condition(), filter.params, "i.last_seen", limit).await
+    }
+
+    pub async fn activity(&self, org_id: i64, before: i64, limit: i64) -> Result<Vec<shell::Item>, Failure> {
+        let mut items = self.rows(org_id, "i.first_seen < ?".to_owned(), vec![before.into()], "i.first_seen", limit).await?;
+        for item in &mut items {
+            item.badge = format!("new {}", item.badge);
+        }
+        Ok(items)
+    }
+}

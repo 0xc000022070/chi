@@ -1,33 +1,16 @@
 use rusqlite::types::Value;
 
+use shell::find::tokens;
+
 use crate::{OPEN, PRIORITIES, People, STATUSES, split_identifier};
 
 pub const HELP: &str = "status: assignee:me|none|handle creator: label:|none project: priority: milestone:|none parent:ID|none \
-has:error|parent|children|estimate|due|links is:open|closed|blocked due:overdue sort:updated|created|priority|due|manual, -key: negates, other words search the text";
+has:error|parent|children|estimate|due|links is:open|closed|blocked due:overdue since:7d before:2026-11-01 sort:updated|created|priority|due|manual, -key: negates, other words search the text";
 
 pub struct Compiled {
     pub condition: String,
     pub params: Vec<Value>,
     pub order: Option<&'static str>,
-}
-
-fn tokens(query: &str) -> Vec<String> {
-    let (mut out, mut word, mut quoted) = (Vec::new(), String::new(), false);
-    for c in query.chars() {
-        match c {
-            '"' => quoted = !quoted,
-            c if c.is_whitespace() && !quoted => {
-                if !word.is_empty() {
-                    out.push(std::mem::take(&mut word));
-                }
-            }
-            c => word.push(c),
-        }
-    }
-    if !word.is_empty() {
-        out.push(word);
-    }
-    out
 }
 
 fn placeholders(n: usize) -> String {
@@ -173,6 +156,19 @@ fn parent(value: &str, params: &mut Vec<Value>) -> Result<String, String> {
     Ok("(pp.prefix = ? AND pi.number = ?)".to_owned())
 }
 
+fn moment(key: &str, lower: &[String], params: &mut Vec<Value>) -> Result<String, String> {
+    let op = match key {
+        "in" => return Ok("1".to_owned()),
+        "since" => ">=",
+        "before" => "<",
+        _ => return Err(format!("unknown filter {key}: — {HELP}")),
+    };
+    params.push(Value::from(
+        shell::find::when(&lower[0]).ok_or(shell::find::TIME_HELP)?,
+    ));
+    Ok(format!("i.updated_at {op} ?"))
+}
+
 fn condition(
     key: &str,
     value: &str,
@@ -219,7 +215,7 @@ fn link(
             "i.due_date != '' AND i.due_date < date('now') AND i.status IN ('{}')",
             OPEN.join("', '")
         ),
-        _ => return Err(format!("unknown filter {key}: — {HELP}")),
+        _ => moment(key, lower, params)?,
     })
 }
 
@@ -327,6 +323,7 @@ mod tests {
             Some(&Value::from("\"crash\"*".to_owned()))
         );
         assert!(compile("color:red", 1, &who).is_err());
+        assert_eq!(compile("in:issues since:2d", 1, &who).unwrap().params.len(), 1);
         assert!(compile("status:nope", 1, &who).is_err());
         assert!(compile("sort:,", 1, &who).is_err());
         assert!(compile("-project:,", 1, &who).is_err());

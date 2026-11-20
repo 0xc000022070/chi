@@ -1,6 +1,8 @@
 mod run;
 mod ui;
 
+pub use ui::SEARCH_HELP;
+
 use std::{
     collections::HashMap,
     path::{Path as FsPath, PathBuf},

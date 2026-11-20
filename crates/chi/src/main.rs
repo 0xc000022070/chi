@@ -1,3 +1,4 @@
+mod home;
 mod mcp;
 
 use axum::{
@@ -41,6 +42,7 @@ fn hooks(dir: Option<String>) -> Result<Vec<PathBuf>, String> {
 
 #[derive(Clone)]
 struct Apps {
+    shell: shell::Shell,
     bugs: bugs::Bugs,
     builds: builds::Builds,
     agents: agents::Agents,
@@ -73,6 +75,7 @@ async fn serve() -> Result<(), String> {
     shell.bootstrap().await.map_err(|failure| failure.1)?;
 
     let apps = Apps {
+        shell: shell.clone(),
         bugs,
         builds,
         agents,
@@ -80,6 +83,7 @@ async fn serve() -> Result<(), String> {
     };
     let live = Router::new()
         .route("/status", get(status))
+        .merge(home::routes())
         .with_state(apps.clone());
     let mcp = Router::new()
         .route("/mcp", post(mcp::serve))

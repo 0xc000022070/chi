@@ -12,3 +12,5 @@ serde_json.workspace = true
 shell.workspace = true
 tokio.workspace = true
 tracker.workspace = true
+maud.workspace = true
+serde.workspace = true

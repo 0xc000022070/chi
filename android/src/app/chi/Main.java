@@ -42,8 +42,9 @@ import java.util.List;
 public final class Main extends Activity {
     private static final String HOST = "chi.nshard.com";
     private static final String HOME = "https://" + HOST;
-    private static final String[] TABS = {"bugs", "builds", "settings"};
-    private static final String[] GLYPHS = {"[!]", "[#]", "[~]"};
+    private static final String[] TABS = {"", "activity", "inbox", "search"};
+    private static final String[] NAMES = {"home", "activity", "inbox", "search"};
+    private static final String[] GLYPHS = {"[^]", "[:]", "[@]", "[?]"};
     private static final String INSTALLED = "app.chi.INSTALLED";
     private static final List<String> RESERVED = List.of("api", "login", "logout", "orgs", "invite", "sso", "callback");
 
@@ -248,7 +249,7 @@ public final class Main extends Activity {
 
     private View tab(int index) {
         TextView glyph = text(GLYPHS[index], 13, Typeface.create(Typeface.MONOSPACE, Typeface.BOLD), R.color.muted);
-        TextView name = text(TABS[index], 12, Typeface.DEFAULT, R.color.muted);
+        TextView name = text(NAMES[index], 12, Typeface.DEFAULT, R.color.muted);
         labels[index] = new TextView[] {glyph, name};
 
         TypedValue ripple = new TypedValue();
@@ -259,7 +260,7 @@ public final class Main extends Activity {
         tab.setGravity(Gravity.CENTER);
         tab.addView(glyph);
         tab.addView(name);
-        tab.setContentDescription(TABS[index]);
+        tab.setContentDescription(NAMES[index]);
         tab.setBackgroundResource(ripple.resourceId);
         tab.setOnClickListener(v -> web.loadUrl(HOME + "/" + slug + "/" + TABS[index]));
         return tab;

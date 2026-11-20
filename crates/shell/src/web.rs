@@ -89,7 +89,8 @@ pub(crate) fn password_matches(password: &str, hash: &str) -> bool {
 impl Shell {
     pub fn router(&self, rooms: Router, api: Router) -> Router {
         let org_side = Router::new()
-            .route("/", get(org_home))
+            .route("/pins", post(pin))
+            .route("/pins/{id}/delete", post(unpin))
             .route("/settings", get(settings))
             .route("/settings/members", post(save_member))
             .route("/settings/invites", post(create_invite))
@@ -260,8 +261,59 @@ async fn events(State(shell): State<Shell>, Extension(ctx): Extension<Ctx>) -> R
         .into_response()
 }
 
-async fn org_home(Extension(ctx): Extension<Ctx>) -> Redirect {
-    Redirect::to(&ctx.href("/bugs"))
+#[derive(Deserialize)]
+struct PinForm {
+    #[serde(default)]
+    name: String,
+    url: String,
+}
+
+fn pin_target(url: &str) -> Option<&str> {
+    let url = url.trim();
+    let head = url.split(['/', '?', '#']).next().unwrap_or("");
+    (!url.is_empty() && url.len() <= 500 && !url.starts_with('/') && !url.contains('\\') && !head.contains(':'))
+        .then_some(url)
+}
+
+async fn pin(
+    State(shell): State<Shell>,
+    Extension(ctx): Extension<Ctx>,
+    Form(form): Form<PinForm>,
+) -> Result<Redirect, Failure> {
+    let url = pin_target(&form.url)
+        .ok_or_else(|| Failure::bad_request("a pin is a page of this org"))?
+        .to_owned();
+    let name: String = form.name.trim().chars().take(80).collect();
+    let name = if name.is_empty() { url.clone() } else { name };
+    let (org_id, user_id, to) = (ctx.org_id, ctx.user_id, ctx.href(&format!("/{url}")));
+    shell
+        .db
+        .call(move |conn| {
+            conn.execute(
+                "INSERT INTO pins (org_id, user_id, name, url, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                (org_id, user_id, name, url, now()),
+            )
+        })
+        .await?;
+    Ok(Redirect::to(&to))
+}
+
+async fn unpin(
+    State(shell): State<Shell>,
+    Extension(ctx): Extension<Ctx>,
+    Path(id): Path<i64>,
+) -> Result<Redirect, Failure> {
+    let (org_id, user_id) = (ctx.org_id, ctx.user_id);
+    shell
+        .db
+        .call(move |conn| {
+            conn.execute(
+                "DELETE FROM pins WHERE id = ?1 AND org_id = ?2 AND user_id = ?3",
+                (id, org_id, user_id),
+            )
+        })
+        .await?;
+    Ok(Redirect::to(&ctx.href("/")))
 }
 
 async fn home(
@@ -1011,6 +1063,15 @@ async fn delete_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pins_stay_inside_the_org() {
+        assert_eq!(pin_target(" search?q=in:bugs "), Some("search?q=in:bugs"));
+        assert_eq!(pin_target("issues/CHI-1"), Some("issues/CHI-1"));
+        for bad in ["", "/x", "//evil.com", "javascript:alert(1)", "https://x.y", "a\\b"] {
+            assert_eq!(pin_target(bad), None, "{bad}");
+        }
+    }
 
     #[test]
     fn next_is_only_ever_a_local_path() {

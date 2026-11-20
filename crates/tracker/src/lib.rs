@@ -1,3 +1,4 @@
+mod feed;
 mod github;
 mod linear;
 mod mcp;
@@ -16,6 +17,7 @@ use serde_json::{Value, json};
 use shell::{Ctx, Db, Failure, Person, Role, Shell, identifiers, secret};
 
 pub use linear::import as import_linear;
+pub use feed::SCOPES;
 pub use mcp::tools;
 pub use store::Issue;
 use store::{Saved, atomic};

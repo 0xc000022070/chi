@@ -66,3 +66,12 @@ CREATE TABLE IF NOT EXISTS grants (
   client_id TEXT NOT NULL REFERENCES clients(id),
   expires_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pins (
+  id INTEGER PRIMARY KEY,
+  org_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pins_by_user ON pins (user_id, org_id, id);

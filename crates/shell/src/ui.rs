@@ -88,6 +88,18 @@ details.add summary::before{content:'+';font:600 13px/1 mono,ui-monospace,monosp
 details.add[open] summary::before{content:'-'}
 .actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 .quick{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:-8px 0 24px}
+main .chips a{display:flex;align-items:center;height:32px;padding:0 10px;border:1px solid var(--line);border-radius:16px;font:13px/1 mono,ui-monospace,monospace;color:var(--muted);text-decoration:none}
+main .chips a:hover{color:var(--ink);border-color:var(--muted)}
+main .chips a[aria-pressed=true]{color:var(--ink);border-color:var(--accent);background:var(--surface)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:16px}
+main a.tile{display:block;padding:16px;border:1px solid var(--line);border-radius:8px;color:var(--ink);text-decoration:none;transition:background .15s}
+main a.tile:hover{background:var(--surface)}
+.tile b{display:block;font-size:28px;font-weight:600;letter-spacing:-.02em}
+.tile span{font-size:13px;color:var(--muted)}
+.tile.hot b{color:var(--bad)}
+h2.day{margin:32px 0 0;font-size:13px;font-weight:600;letter-spacing:.06em;color:var(--muted)}
+.pin{margin-bottom:24px}.pin .actions{align-items:center;justify-content:space-between;margin:0}
 button.resolved{color:var(--good);background:var(--good-bg);border-color:var(--good)}
 button.ignored{color:var(--warn);background:var(--warn-bg);border-color:var(--warn)}
 button.open{color:var(--bad);background:var(--bad-bg);border-color:var(--bad)}
@@ -117,6 +129,17 @@ h2+.dim{margin-top:-4px}
 #status::after{content:'● live';margin-left:auto;color:var(--good)}
 #status.off::after{content:'○ offline';color:var(--bad)}
 .app nav>a{display:none}
+#menu{display:flex;flex-direction:column;justify-content:center;gap:5px;width:44px;height:44px;margin-left:-10px;padding:0 10px;border:0;background:none}
+#menu i{display:block;width:22px;height:2px;border-radius:1px;background:var(--ink)}
+#menu i:nth-child(2){width:15px}
+#menu:hover i:nth-child(2){width:22px}
+#scrim{position:fixed;inset:0;z-index:2;background:rgb(0 0 0/.5);opacity:0;pointer-events:none;transition:opacity .2s}
+#drawer{position:fixed;top:0;bottom:0;left:0;z-index:3;width:min(300px,85vw);padding:12px 12px 48px;overflow-y:auto;background:var(--bg);border-right:1px solid var(--line);transform:translateX(-100%);visibility:hidden;transition:transform .2s,visibility .2s}
+.menu #drawer{transform:none;visibility:visible}.menu #scrim{opacity:1;pointer-events:auto}
+#drawer h3{margin:20px 12px 4px;font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+#drawer a{display:flex;align-items:center;height:44px;padding:0 12px;border-radius:6px;color:var(--ink);text-decoration:none}
+#drawer a:hover,#drawer a[aria-current]{background:var(--surface)}
+#drawer form{display:block;margin:12px 12px 0}#drawer form button{width:100%}
 #get-app{display:none;gap:12px;align-items:center;padding:8px 8px 8px 16px;border-bottom:1px solid var(--line);background:var(--surface);font-size:14px}
 .android #get-app{display:flex}
 #get-app span{flex:1}
@@ -171,11 +194,16 @@ function settle(){if(due&&!busy())location.reload()}addEventListener('focusout',
 if(window.EventSource){const es=new EventSource('events');es.onmessage=e=>{tick();if(document.querySelector('[data-live~="'+e.data+'"]')){due=true;settle()}}}
 const pal=document.getElementById('palette'),pin=pal.querySelector('input'),plist=pal.querySelector('div');let pseq=0;
 function pick(d){const a=[...plist.children],i=a.findIndex(x=>x.hasAttribute('aria-selected'));a[i]?.removeAttribute('aria-selected');const n=a[(i+d+a.length)%a.length];if(n){n.setAttribute('aria-selected','');n.scrollIntoView({block:'nearest'})}}
-async function find(){const q=pin.value.trim(),n=++pseq;const r=await fetch('search.json?q='+encodeURIComponent(q)).then(r=>r.ok?r.json():[]).catch(()=>[]);if(n!==pseq)return;plist.replaceChildren(...r.map(x=>{const a=document.createElement('a');a.href=x.url;a.textContent=x.title;if(x.hint){const s=document.createElement('span');s.className='dim';s.textContent=' '+x.hint;a.append(s)}return a}));pick(1)}
+async function find(){const q=pin.value.trim(),n=++pseq;const r=await fetch('search.json?q='+encodeURIComponent(q)).then(r=>r.ok?r.json():[]).catch(()=>[]);if(n!==pseq)return;plist.replaceChildren(...r.map(x=>{const a=document.createElement('a');a.href=x.url;a.textContent=x.title;if(x.hint){const s=document.createElement('span');s.className='dim';s.textContent=' '+x.hint;a.append(s)}return a}));if(q){const a=document.createElement('a');a.href='search?q='+encodeURIComponent(q);a.textContent='search everywhere for “'+q+'”';plist.append(a)}pick(1)}
 pin.addEventListener('input',find);pin.addEventListener('keydown',e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();pick(e.key==='ArrowDown'?1:-1)}else if(e.key==='Enter'){e.preventDefault();const a=plist.querySelector('[aria-selected]');if(a)location=a.href}});
 function palette(){pin.value='';pal.showModal();find()}
-const go={i:'issues',p:'projects',d:'docs',n:'inbox',e:'bugs',b:'builds',a:'agents',s:'settings',m:'issues?q=assignee:me'};let g=0;
-addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();palette();return}
+const go={h:'.',l:'activity',f:'search',i:'issues',p:'projects',d:'docs',n:'inbox',e:'bugs',b:'builds',a:'agents',s:'settings',m:'issues?q=assignee:me'};let g=0;
+const root=document.documentElement,menu=document.getElementById('menu'),drawer=document.getElementById('drawer');
+function side(o){root.classList.toggle('menu',o);menu.setAttribute('aria-expanded',o);if(o)drawer.querySelector('a').focus()}
+menu.onclick=()=>side(!root.classList.contains('menu'));document.getElementById('scrim').onclick=()=>side(false);
+for(const a of drawer.querySelectorAll('a'))if(a.pathname===location.pathname&&a.search===location.search)a.setAttribute('aria-current','page');
+document.getElementById('pin').onsubmit=e=>{const f=e.target.elements;f.name.value=document.title.replace(/ · chi$/,'');f.url.value=(location.pathname+location.search).slice(new URL(document.baseURI).pathname.length)||'.'};
+addEventListener('keydown',e=>{if(e.key==='Escape'&&root.classList.contains('menu')){side(false);return}if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();palette();return}
 if(e.metaKey||e.ctrlKey||e.altKey||e.target.closest('input,textarea,select,[contenteditable]')||document.querySelector('dialog[open]'))return;
 if(g&&go[e.key]){location=go[e.key];g=0;return}g=e.key==='g'?Date.now():0;if(g)return;
 const t=document.querySelector('[data-key="'+CSS.escape(e.key)+'"]');if(t){e.preventDefault();t.matches('input,select,textarea')?t.focus():t.click();return}
@@ -247,24 +275,65 @@ pub fn hub_page(title: &str, signed_in: bool, body: Markup) -> Html<String> {
     )
 }
 
+const TABS: [(&str, &str, &str); 4] = [
+    (".", "[^]", "home"),
+    ("activity", "[:]", "activity"),
+    ("inbox", "[@]", "inbox"),
+    ("search", "[?]", "search"),
+];
+
+type Links = &'static [(&'static str, &'static str, &'static str)];
+
+const DRAWER: [(&str, Links); 4] = [
+    ("you", &TABS),
+    (
+        "work",
+        &[
+            ("issues", "[=]", "issues"),
+            ("issues?q=assignee:me%20is:open", "[=]", "my issues"),
+            ("projects", "[>]", "projects"),
+            ("docs", "[/]", "docs"),
+            ("views", "[=]", "views"),
+        ],
+    ),
+    (
+        "ops",
+        &[
+            ("bugs", "[!]", "bugs"),
+            ("builds", "[#]", "builds"),
+            ("agents", "[*]", "agents"),
+        ],
+    ),
+    (
+        "org",
+        &[
+            ("labels", "[~]", "labels"),
+            ("templates", "[~]", "templates"),
+            ("settings", "[~]", "settings"),
+        ],
+    ),
+];
+
 pub fn org_page(ctx: &Ctx, title: &str, body: Markup) -> Html<String> {
     frame(
         title,
         &ctx.href("/"),
         html! {
+            button #menu type="button" aria-label="menu" aria-controls="drawer" aria-expanded="false" { i {} i {} i {} }
             b { a href="/" { (ctx.org_name) } }
-            a href="issues" { (glyph("[=]")) "issues" }
-            a href="projects" { (glyph("[>]")) "projects" }
-            a href="docs" { (glyph("[/]")) "docs" }
-            a href="inbox" { (glyph("[@]")) "inbox" }
-            a href="bugs" { (glyph("[!]")) "bugs" }
-            a href="builds" { (glyph("[#]")) "builds" }
-            a href="agents" { (glyph("[*]")) "agents" }
-            a href="settings" { (glyph("[~]")) "settings" }
-            (logout())
+            @for (href, glyph_text, name) in TABS { a href=(href) { (glyph(glyph_text)) (name) } }
         },
         body,
         html! {
+            div #scrim {}
+            aside #drawer aria-label="menu" {
+                @for (section, links) in DRAWER {
+                    h3 { (section) }
+                    @for (href, glyph_text, name) in links { a href=(href) { (glyph(glyph_text)) (name) } }
+                }
+                form #pin method="post" action="pins" { input type="hidden" name="name"; input type="hidden" name="url"; button { "pin this page" } }
+                (logout())
+            }
             div #tip hidden {}
             footer #status aria-live="polite" {}
             dialog #palette aria-label="Go to" { form method="dialog" { input type="search" placeholder="Jump to an issue, project, doc or page" aria-label="Search"; } div role="listbox" {} }
@@ -274,6 +343,7 @@ pub fn org_page(ctx: &Ctx, title: &str, body: Markup) -> Html<String> {
                     dt { kbd { "Ctrl K" } } dd { "jump anywhere" }
                     dt { kbd { "c" } } dd { "new issue" }
                     dt { kbd { "/" } } dd { "search this page" }
+                    dt { kbd { "g" } " then " kbd { "h l f" } } dd { "home, activity, search" }
                     dt { kbd { "g" } " then " kbd { "i p d n e b a s m" } } dd { "issues, projects, docs, inbox, errors, builds, agents, settings, my issues" }
                     dt { kbd { "s p a e" } } dd { "on an issue: status, priority, assignee, edit" }
                 }

@@ -198,3 +198,73 @@ async fn retry(
         .await?;
     Ok(Redirect::to(&ctx.href(&format!("/{BASE}/{id}"))))
 }
+
+pub const SEARCH_HELP: &str = "agent: status:|is:queued|running|done|failed|cancelled by:requester source: model:";
+
+impl Agents {
+    async fn items(
+        &self,
+        org_id: i64,
+        condition: String,
+        mut params: Vec<rusqlite::types::Value>,
+        limit: i64,
+    ) -> Result<Vec<shell::Item>, Failure> {
+        params.insert(0, org_id.into());
+        params.push(limit.into());
+        let jobs: Vec<crate::Job> = self
+            .db
+            .call(move |conn| {
+                conn.prepare(&format!(
+                    "SELECT {} FROM jobs WHERE org_id = ? AND {condition} ORDER BY coalesce(finished_at, started_at, created_at) DESC LIMIT ?",
+                    crate::JOB_COLUMNS
+                ))?
+                .query_map(rusqlite::params_from_iter(params), crate::job_row)?
+                .collect()
+            })
+            .await?;
+        Ok(jobs
+            .into_iter()
+            .map(|job| shell::Item {
+                at: job.finished_at.or(job.started_at).unwrap_or(job.created_at),
+                kind: "agent",
+                title: format!("{} · {}", job.agent, job.prompt.lines().find(|line| !line.trim().is_empty()).unwrap_or("").chars().take(120).collect::<String>()),
+                url: format!("{BASE}/{}", job.id),
+                badge: job.status,
+                detail: [job.requester, job.source, job.model]
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+            })
+            .collect())
+    }
+
+    pub async fn find(&self, org_id: i64, query: &str, limit: i64) -> Result<Vec<shell::Item>, Failure> {
+        let filter = shell::find::compile(
+            query,
+            "coalesce(finished_at, started_at, created_at)",
+            &["prompt", "output", "error"],
+            |term, filter| {
+                let lower = || term.lower().into_iter().map(rusqlite::types::Value::from).collect();
+                match term.key.as_str() {
+                    "agent" => filter.add(term.negated, "lower(agent) IN ({})", lower()),
+                    "status" | "is" => filter.add(term.negated, "status IN ({})", lower()),
+                    "source" => filter.add(term.negated, "lower(source) IN ({})", lower()),
+                    "model" => filter.add(term.negated, "lower(model) IN ({})", lower()),
+                    "by" | "requester" => {
+                        let sql = vec!["instr(lower(requester), ?) > 0"; term.values.len()].join(" OR ");
+                        filter.add(term.negated, &sql, lower());
+                    }
+                    _ => return Ok(false),
+                }
+                Ok(true)
+            },
+        )
+        .map_err(|message| Failure::bad_request(&message))?;
+        self.items(org_id, filter.condition(), filter.params, limit).await
+    }
+
+    pub async fn activity(&self, org_id: i64, before: i64, limit: i64) -> Result<Vec<shell::Item>, Failure> {
+        self.items(org_id, "coalesce(finished_at, started_at, created_at) < ?".to_owned(), vec![before.into()], limit).await
+    }
+}

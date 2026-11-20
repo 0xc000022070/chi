@@ -476,3 +476,93 @@ mod tests {
         assert_eq!(file_size(90_000_000), "85.8 MB");
     }
 }
+
+pub const SEARCH_HELP: &str = "status:uploading|finished|failed is:failed|ok|running repo: branch: tag: by:builder";
+
+impl Builds {
+    async fn items(
+        &self,
+        org_id: i64,
+        condition: String,
+        mut params: Vec<rusqlite::types::Value>,
+        limit: i64,
+    ) -> Result<Vec<shell::Item>, Failure> {
+        params.insert(0, org_id.into());
+        params.push(limit.into());
+        let builds: Vec<Build> = self
+            .db
+            .call(move |conn| {
+                conn.prepare(&format!(
+                    "SELECT {BUILD_COLUMNS} FROM builds WHERE org_id = ? AND {condition} ORDER BY coalesce(finished_at, started_at) DESC LIMIT ?"
+                ))?
+                .query_map(rusqlite::params_from_iter(params), build_row)?
+                .collect()
+            })
+            .await?;
+        let repos = self.shell.repos(org_id).await?;
+        Ok(builds
+            .into_iter()
+            .map(|build| shell::Item {
+                at: build.finished_at.unwrap_or(build.started_at),
+                kind: "build",
+                title: format!(
+                    "{} {}",
+                    repos.iter().find(|repo| repo.id == build.repo_id).map_or("?", |repo| repo.name.as_str()),
+                    build.version
+                ),
+                url: format!("{BASE}/{}", build.id),
+                badge: if build.status == "uploading" { "running".to_owned() } else { build.status },
+                detail: [build.branch, build.tag, build.commit.chars().take(8).collect(), build.builder]
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+            })
+            .collect())
+    }
+
+    pub async fn find(&self, org_id: i64, query: &str, limit: i64) -> Result<Vec<shell::Item>, Failure> {
+        let repos = self.shell.repos(org_id).await?;
+        let filter = shell::find::compile(
+            query,
+            "coalesce(finished_at, started_at)",
+            &["version", "commit_sha", "branch", "tag", "builder"],
+            |term, filter| {
+                let lower = || term.lower().into_iter().map(rusqlite::types::Value::from).collect();
+                match term.key.as_str() {
+                    "status" => filter.add(term.negated, "status IN ({})", lower()),
+                    "branch" => filter.add(term.negated, "lower(branch) IN ({})", lower()),
+                    "tag" => filter.add(term.negated, "lower(tag) IN ({})", lower()),
+                    "by" => filter.add(term.negated, "lower(builder) IN ({})", lower()),
+                    "repo" => {
+                        let wanted = term.lower();
+                        let ids = repos
+                            .iter()
+                            .filter(|repo| wanted.contains(&repo.name.to_lowercase()))
+                            .map(|repo| repo.id.into())
+                            .chain([(-1).into()])
+                            .collect();
+                        filter.add(term.negated, "repo_id IN ({})", ids);
+                    }
+                    "is" => {
+                        let sql = match term.lower().first().map(String::as_str) {
+                            Some("failed") => "status = 'failed'",
+                            Some("ok") => "status = 'finished'",
+                            Some("running") => "status = 'uploading'",
+                            _ => return Err("is: takes failed, ok or running".to_owned()),
+                        };
+                        filter.add(term.negated, sql, Vec::new());
+                    }
+                    _ => return Ok(false),
+                }
+                Ok(true)
+            },
+        )
+        .map_err(|message| Failure::bad_request(&message))?;
+        self.items(org_id, filter.condition(), filter.params, limit).await
+    }
+
+    pub async fn activity(&self, org_id: i64, before: i64, limit: i64) -> Result<Vec<shell::Item>, Failure> {
+        self.items(org_id, "coalesce(finished_at, started_at) < ?".to_owned(), vec![before.into()], limit).await
+    }
+}

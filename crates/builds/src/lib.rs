@@ -27,6 +27,7 @@ use shell::{Db, Failure, Limiter, Repo, Shell, client_ip, now};
 use tokio::io::AsyncWriteExt;
 
 pub use client::push;
+pub use ui::SEARCH_HELP;
 
 const MAX_CHUNK: u64 = 90 * 1024 * 1024;
 const MAX_ARTIFACT: u64 = 2 * 1024 * 1024 * 1024;

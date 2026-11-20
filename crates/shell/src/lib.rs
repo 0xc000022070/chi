@@ -1,3 +1,4 @@
+pub mod find;
 mod markdown;
 mod oauth;
 mod sso;
@@ -23,6 +24,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
+pub use find::Item;
 pub use markdown::{autolink, identifiers, markdown};
 pub use oauth::bearer;
 pub use store::{Person, Repo};
@@ -245,6 +247,12 @@ struct Pending {
     next: String,
 }
 
+pub struct Pin {
+    pub id: i64,
+    pub name: String,
+    pub url: String,
+}
+
 pub struct HookResult {
     pub hook: String,
     pub ok: bool,
@@ -413,6 +421,19 @@ impl Shell {
             );
         }
         Ok(())
+    }
+
+    pub async fn pins(&self, ctx: &Ctx) -> Result<Vec<Pin>, Failure> {
+        let (org_id, user_id) = (ctx.org_id, ctx.user_id);
+        self.db
+            .call(move |conn| {
+                conn.prepare("SELECT id, name, url FROM pins WHERE org_id = ?1 AND user_id = ?2 ORDER BY id")?
+                    .query_map((org_id, user_id), |row| {
+                        Ok(Pin { id: row.get(0)?, name: row.get(1)?, url: row.get(2)? })
+                    })?
+                    .collect()
+            })
+            .await
     }
 
     pub async fn run_hooks(&self, event: &Value) -> Vec<HookResult> {
