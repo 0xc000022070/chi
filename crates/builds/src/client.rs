@@ -9,7 +9,8 @@ use serde_json::{Map, Value, json};
 
 use crate::file_sha256;
 
-const CHUNK: usize = 32 * 1024 * 1024;
+const CHUNK: usize = 8 * 1024 * 1024;
+const ATTEMPTS: u32 = 5;
 pub(crate) const MAX_DIFF: usize = 300_000;
 const MAX_COMMITS: &str = "200";
 const USAGE: &str = "usage: chi push --url URL --version V [--commit SHA] [--branch B] [--tag prerelease|release] [--builder NAME] [--failed] FILE...
@@ -18,32 +19,58 @@ since the previous build of the same tag go along, for the repo's pipeline to re
 
 fn explain(error: ureq::Error) -> String {
     match error {
-        ureq::Error::Status(code, response) => format!(
-            "server answered {code}: {}",
-            response.into_string().unwrap_or_default()
-        ),
+        ureq::Error::Status(code, response) => {
+            let body = response.into_string().unwrap_or_default();
+            format!("server answered {code}: {}", summary(&body))
+        }
         other => other.to_string(),
     }
+}
+
+// Proxies answer with whole HTML pages; their <title> is the useful part.
+fn summary(body: &str) -> &str {
+    let title = body
+        .split_once("<title>")
+        .and_then(|(_, rest)| rest.split_once("</title>"))
+        .map(|(title, _)| title);
+    let text = title.unwrap_or(body).trim();
+    if title.is_none() && text.contains('<') {
+        return "html page";
+    }
+    text.lines().next().unwrap_or_default()
+}
+
+fn retryable(error: &ureq::Error) -> bool {
+    match error {
+        ureq::Error::Status(code, _) => *code >= 500,
+        ureq::Error::Transport(_) => true,
+    }
+}
+
+fn read_chunk(file: &mut File, offset: u64, buffer: &mut [u8]) -> Result<usize, String> {
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|e| e.to_string())?;
+    let mut filled = 0;
+    while filled < buffer.len() {
+        let read = file
+            .read(&mut buffer[filled..])
+            .map_err(|e| e.to_string())?;
+        if read == 0 {
+            break;
+        }
+        filled += read;
+    }
+    Ok(filled)
 }
 
 fn upload(base: &str, auth: &str, build: i64, path: &Path, name: &str) -> Result<(), String> {
     let mut file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let size = file.metadata().map_err(|e| e.to_string())?.len();
     let mut offset = 0u64;
+    let mut failures = 0;
     let mut buffer = vec![0u8; CHUNK];
     while offset < size {
-        file.seek(SeekFrom::Start(offset))
-            .map_err(|e| e.to_string())?;
-        let mut filled = 0;
-        while filled < CHUNK {
-            let read = file
-                .read(&mut buffer[filled..])
-                .map_err(|e| e.to_string())?;
-            if read == 0 {
-                break;
-            }
-            filled += read;
-        }
+        let filled = read_chunk(&mut file, offset, &mut buffer)?;
         let sent = ureq::put(&format!(
             "{base}/api/builds/{build}/artifacts/{name}?offset={offset}"
         ))
@@ -54,8 +81,17 @@ fn upload(base: &str, auth: &str, build: i64, path: &Path, name: &str) -> Result
             Err(ureq::Error::Status(409, response)) => {
                 response.into_json().map_err(|e| e.to_string())?
             }
-            Err(error) => return Err(explain(error)),
+            // A cut-off chunk may have been partly written; the retry at the
+            // stale offset gets 409 with the size received and resumes there.
+            Err(error) if retryable(&error) && failures + 1 < ATTEMPTS => {
+                failures += 1;
+                eprintln!("{name}: at byte {offset}: {}, retrying", explain(error));
+                std::thread::sleep(std::time::Duration::from_secs(2u64.pow(failures)));
+                continue;
+            }
+            Err(error) => return Err(format!("{name}: at byte {offset}: {}", explain(error))),
         };
+        failures = 0;
         offset = answer["received"]
             .as_u64()
             .ok_or("server did not report the size received")?;
@@ -247,6 +283,14 @@ mod tests {
         assert_eq!(commits.len(), 2);
         assert_eq!(commits[0]["body"], "Fixes ABC-1");
         assert_eq!(commits[1]["sha"], "b2");
+    }
+
+    #[test]
+    fn error_bodies_shrink_to_one_line() {
+        let page = "<!DOCTYPE html>\n<html><head><title>chi.nshard.com | 524: A timeout occurred</title></head></html>";
+        assert_eq!(summary(page), "chi.nshard.com | 524: A timeout occurred");
+        assert_eq!(summary("<html><body>bad gateway</body>\n</html>"), "html page");
+        assert_eq!(summary("build is closed\n"), "build is closed");
     }
 
     #[test]
